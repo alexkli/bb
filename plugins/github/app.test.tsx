@@ -38,10 +38,10 @@ describe("GitHub app navigation", () => {
             ghOk: true,
             ghState: "ready",
             ghError: null,
-            repos: [{ repo: "get-bb/bb", projectId: null }],
+            repos: [{ repo: "get-bb/bb", projectId: null, login: null }],
             lastSyncedAt: null,
           }),
-          viewer: () => ({ login: "octocat" }),
+          viewer: () => ({ login: "octocat", logins: ["octocat"] }),
         },
       },
     );

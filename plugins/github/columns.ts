@@ -124,12 +124,12 @@ export function moveColumn(
 export function repoLabels(repos: readonly string[]): Map<string, string> {
   const nameCounts = new Map<string, number>();
   for (const repo of repos) {
-    const name = repo.slice(repo.indexOf("/") + 1).toLowerCase();
+    const name = repo.slice(repo.lastIndexOf("/") + 1).toLowerCase();
     nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
   }
   const labels = new Map<string, string>();
   for (const repo of repos) {
-    const name = repo.slice(repo.indexOf("/") + 1);
+    const name = repo.slice(repo.lastIndexOf("/") + 1);
     labels.set(
       repo,
       (nameCounts.get(name.toLowerCase()) ?? 0) > 1 ? repo : name,

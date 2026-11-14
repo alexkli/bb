@@ -50,6 +50,7 @@ import {
   toggleColumn,
   type ColumnId,
 } from "./columns.js";
+import { avatarUrl, GITHUB_HOST, parseRepoRef } from "./repo-ref.js";
 import type { githubRpcContract } from "./server.js";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -227,6 +228,38 @@ function useSpawn(): {
 }
 
 let viewerLogin: string | null = null;
+let viewerAllLogins: string[] = [];
+
+const AvatarHostContext = createContext<string>(GITHUB_HOST);
+const RepoLoginsContext = createContext<ReadonlyMap<string, string>>(new Map());
+
+function RepoScope({
+  repo,
+  children,
+}: {
+  repo: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <AvatarHostContext.Provider value={parseRepoRef(repo).host}>
+      {children}
+    </AvatarHostContext.Provider>
+  );
+}
+
+function useViewerLogins(): string[] {
+  const primary = useViewer();
+  return primary === null
+    ? []
+    : viewerAllLogins.length > 0
+      ? viewerAllLogins
+      : [primary];
+}
+
+function useRepoLogin(repo: string): string | null {
+  const viewer = useViewer();
+  return useContext(RepoLoginsContext).get(repo) ?? viewer;
+}
 
 function useViewer(): string | null {
   const rpc = useRpc<typeof githubRpcContract>();
@@ -236,6 +269,7 @@ function useViewer(): string | null {
     rpc.call("viewer").then(
       (result) => {
         viewerLogin = result.login;
+        viewerAllLogins = result.logins;
         setLogin(result.login);
       },
       () => {},
@@ -253,12 +287,25 @@ function Avatar({
   size?: string;
   className?: string;
 }) {
+  const host = useContext(AvatarHostContext);
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <span
+        title={login}
+        className={`${size} inline-flex shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium uppercase text-muted-foreground ${className ?? ""}`}
+      >
+        {login.slice(0, 1)}
+      </span>
+    );
+  }
   return (
     <img
-      src={`https://github.com/${encodeURIComponent(login)}.png?size=64`}
+      src={avatarUrl(host, login)}
       alt={login}
       title={login}
       loading="lazy"
+      onError={() => setFailed(true)}
       className={`${size} shrink-0 rounded-full bg-muted ${className ?? ""}`}
     />
   );
@@ -719,12 +766,7 @@ function PersonAvatar({
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex shrink-0">
-          <img
-            src={`https://github.com/${encodeURIComponent(login)}.png?size=64`}
-            alt={login}
-            loading="lazy"
-            className={`size-5 shrink-0 rounded-full bg-muted ${className ?? ""}`}
-          />
+          <Avatar login={login} className={className} />
         </span>
       </TooltipTrigger>
       <TooltipContent>
@@ -804,7 +846,7 @@ function StatusCell({ item }: { item: Item }) {
 
 function RowMenu({ item }: { item: Item }) {
   const navigate = useBbNavigate();
-  const viewer = useViewer();
+  const viewer = useRepoLogin(item.repo);
   const { setIssueState, setAssignees } = useIssueMutations();
   const assignedToMe = viewer !== null && item.assignees.includes(viewer);
 
@@ -1058,40 +1100,42 @@ function ItemRow({
   const { spawn, spawningKey } = useSpawn();
   const busy = spawningKey === `${item.repo}#${item.number}`;
   return (
-    <div
-      className={`${ROW_CLASS} cursor-pointer hover:bg-accent/50`}
-      onClick={onOpen}
-    >
-      {columns.map((column) => (
-        <ItemCell
-          key={column}
-          column={column}
-          item={item}
-          links={links}
-          repoLabel={repoLabel}
-          agentInTitle={!columns.includes("agent")}
-        />
-      ))}
-      <span className={COL.actions}>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7"
-          disabled={spawningKey !== null}
-          onClick={(event) => {
-            event.stopPropagation();
-            spawn(
-              item.kind === "issue" ? "startWork" : "startReview",
-              item.repo,
-              item.number,
-            );
-          }}
-        >
-          {busy ? "…" : item.kind === "issue" ? "Start" : "Review"}
-        </Button>
-        <RowMenu item={item} />
-      </span>
-    </div>
+    <RepoScope repo={item.repo}>
+      <div
+        className={`${ROW_CLASS} cursor-pointer hover:bg-accent/50`}
+        onClick={onOpen}
+      >
+        {columns.map((column) => (
+          <ItemCell
+            key={column}
+            column={column}
+            item={item}
+            links={links}
+            repoLabel={repoLabel}
+            agentInTitle={!columns.includes("agent")}
+          />
+        ))}
+        <span className={COL.actions}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7"
+            disabled={spawningKey !== null}
+            onClick={(event) => {
+              event.stopPropagation();
+              spawn(
+                item.kind === "issue" ? "startWork" : "startReview",
+                item.repo,
+                item.number,
+              );
+            }}
+          >
+            {busy ? "…" : item.kind === "issue" ? "Start" : "Review"}
+          </Button>
+          <RowMenu item={item} />
+        </span>
+      </div>
+    </RepoScope>
   );
 }
 
@@ -1360,7 +1404,7 @@ function AssigneePicker({
   onToggle: (login: string, assigned: boolean) => void;
 }) {
   const rpc = useRpc<typeof githubRpcContract>();
-  const viewer = useViewer();
+  const viewer = useRepoLogin(repo);
   const [users, setUsers] = useState<string[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -2415,14 +2459,16 @@ function PullPanelTab({ threadId }: ExperimentalThreadActionTabProps) {
     );
   }
   return (
-    <PullDetailView
-      repo={selected.repo}
-      number={selected.number}
-      compact
-      workspaceEnvironmentId={selected.environmentId}
-      backLabel="All PRs"
-      onBack={() => setSelected(null)}
-    />
+    <RepoScope repo={selected.repo}>
+      <PullDetailView
+        repo={selected.repo}
+        number={selected.number}
+        compact
+        workspaceEnvironmentId={selected.environmentId}
+        backLabel="All PRs"
+        onBack={() => setSelected(null)}
+      />
+    </RepoScope>
   );
 }
 
@@ -2580,23 +2626,34 @@ function GithubPanel({ subPath }: PluginNavPanelProps) {
     } catch {}
   }, []);
   const people = usePeople();
+  const repoLogins = useMemo(
+    () =>
+      new Map(
+        (status?.repos ?? []).flatMap((info) =>
+          info.login === null ? [] : [[info.repo, info.login] as const],
+        ),
+      ),
+    [status],
+  );
 
   return (
-    <PeopleContext.Provider value={people}>
-      <TooltipProvider delayDuration={200}>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
-          <div className="mx-auto w-full max-w-5xl space-y-4">
-            <GithubPanelBody
-              route={route}
-              navigate={navigate}
-              status={status}
-              query={query}
-              setQuery={setQuery}
-            />
+    <RepoLoginsContext.Provider value={repoLogins}>
+      <PeopleContext.Provider value={people}>
+        <TooltipProvider delayDuration={200}>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+            <div className="mx-auto w-full max-w-5xl space-y-4">
+              <GithubPanelBody
+                route={route}
+                navigate={navigate}
+                status={status}
+                query={query}
+                setQuery={setQuery}
+              />
+            </div>
           </div>
-        </div>
-      </TooltipProvider>
-    </PeopleContext.Provider>
+        </TooltipProvider>
+      </PeopleContext.Provider>
+    </RepoLoginsContext.Provider>
   );
 }
 
@@ -2618,7 +2675,7 @@ function ListView({
   onOpenItem: (repo: string, number: number) => void;
 }) {
   const { items, error } = useItems(kind);
-  const viewer = useViewer();
+  const viewer = useViewerLogins();
   const parsed = useMemo(() => parseQuery(query), [query]);
   const links = useLinks();
   const sort: ListSort = parsed.sort ?? DEFAULT_SORT;
@@ -2705,20 +2762,24 @@ function GithubPanelBody({
 
   if (route.view === "issue") {
     return (
-      <IssueDetailView
-        repo={route.repo}
-        number={route.number}
-        onBack={() => navigate({ view: "issues" })}
-      />
+      <RepoScope repo={route.repo}>
+        <IssueDetailView
+          repo={route.repo}
+          number={route.number}
+          onBack={() => navigate({ view: "issues" })}
+        />
+      </RepoScope>
     );
   }
   if (route.view === "pull") {
     return (
-      <PullDetailView
-        repo={route.repo}
-        number={route.number}
-        onBack={() => navigate({ view: "pulls" })}
-      />
+      <RepoScope repo={route.repo}>
+        <PullDetailView
+          repo={route.repo}
+          number={route.number}
+          onBack={() => navigate({ view: "pulls" })}
+        />
+      </RepoScope>
     );
   }
   if (route.view === "new") {

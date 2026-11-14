@@ -32,11 +32,24 @@ bb plugin install github
 Uses the GitHub CLI. If `gh auth status` passes, the plugin works; otherwise
 it reports needs-configuration. No tokens are stored by the plugin.
 
+Every account listed by `gh auth status` is used, on github.com and on GitHub
+Enterprise Server hosts. For each repository the plugin uses the host's active
+account when it has access, otherwise it tries the host's other accounts and
+remembers the first one that can read the repository. Commands for that
+repository then run with that account's token (`gh auth token --user`) passed
+through `GH_TOKEN`, so `gh auth switch` is never changed. The account shown for
+each repository is part of the `status` RPC, and `@me` in filters matches any
+of your accounts.
+
 ## Which repos are tracked
 
 - Every BB project source whose checkout has a GitHub `origin` remote
   (repo → project mapping is also how spawn picks the project).
-- Plus the `extraRepos` setting: comma-separated `owner/repo` list. Entries that
+- Remotes on GitHub Enterprise Server hosts that `gh` is logged in to, and ssh
+  host aliases such as `github.com-work`, are recognized too. Enterprise repos
+  are named `host/owner/repo`.
+- Plus the `extraRepos` setting: comma-separated `owner/repo` (or
+  `host/owner/repo`) list. Entries that
   are not `owner/repo` — a `owner/*` wildcard, a bare owner, a typo — are not
   tracked; `bb github repos` names them on stderr and the plugin log warns once
   per distinct set. Wildcards are not supported.

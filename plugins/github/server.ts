@@ -17,6 +17,15 @@ import {
   DEFAULT_COLUMNS_SETTING,
   parseColumns,
 } from "./columns.js";
+import {
+  GITHUB_HOST,
+  REPO_REF_PATTERN,
+  isRepoRef,
+  parseAuthStatus,
+  parseRepoRef,
+  repoFromRemote,
+  type GhAccount,
+} from "./repo-ref.js";
 
 const SYNC_INTERVAL_MS = 15 * 60_000;
 const SYNC_RETRY_MAX_MS = 5 * 60_000;
@@ -30,7 +39,7 @@ const GH_HINT =
   "Install the GitHub CLI (https://cli.github.com) and run `gh auth login`, " +
   "then `bb plugin reload github`.";
 
-const repoNameSchema = z.string().regex(/^[\w.-]+\/[\w.-]+$/);
+const repoNameSchema = z.string().regex(REPO_REF_PATTERN);
 const itemNumberSchema = z.number().int().positive();
 const itemInputSchema = z
   .object({ repo: repoNameSchema, number: itemNumberSchema })
@@ -39,7 +48,11 @@ const nonBlankStringSchema = z
   .string()
   .refine((value) => value.trim().length > 0, "must not be blank");
 const repoInfoSchema = z
-  .object({ repo: repoNameSchema, projectId: z.string().nullable() })
+  .object({
+    repo: repoNameSchema,
+    projectId: z.string().nullable(),
+    login: z.string().nullable(),
+  })
   .strict();
 const itemSchema = z
   .object({
@@ -186,7 +199,12 @@ export const githubRpcContract = defineRpcContract({
   },
   viewer: {
     input: z.null(),
-    output: z.object({ login: z.string().min(1) }).strict(),
+    output: z
+      .object({
+        login: z.string().min(1),
+        logins: z.array(z.string().min(1)).min(1),
+      })
+      .strict(),
   },
   columns: {
     input: z.null(),
@@ -305,7 +323,7 @@ export const githubRpcContract = defineRpcContract({
   },
 });
 
-type RepoInfo = z.infer<typeof repoInfoSchema>;
+type RepoInfo = Omit<z.infer<typeof repoInfoSchema>, "login">;
 type CachedItem = z.infer<typeof itemSchema>;
 type ThreadLink = z.infer<typeof threadLinkSchema>;
 
@@ -346,18 +364,19 @@ function isGhUnavailableError(error: unknown): error is Error {
 }
 
 const GH_NO_CREDENTIALS = /no oauth token|not logged in/i;
-const GH_HOST = "github.com";
+const GH_HOST = GITHUB_HOST;
+const isRepoName = isRepoRef;
+const REPO_ACCESS_FAILURE =
+  /Could not resolve to a Repository|HTTP 40[134]|SAML|Bad credentials|Resource not accessible/i;
 
-function parseGithubRemote(url: string): string | null {
-  const match = url
-    .trim()
-    .match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
-  if (match === null) return null;
-  return `${match[1]}/${match[2]}`;
-}
-
-function isRepoName(value: unknown): value is string {
-  return typeof value === "string" && /^[\w.-]+\/[\w.-]+$/.test(value);
+class GhProcessError extends Error {
+  constructor(
+    message: string,
+    readonly stdout: string,
+    readonly stderr: string,
+  ) {
+    super(message);
+  }
 }
 
 export function parseExtraRepos(raw: string): {
@@ -400,6 +419,7 @@ function run(
   args: string[],
   timeoutMs = 30_000,
   priority: VcsProcessPriority = "background",
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ stdout: string; stderr: string }> {
   return runVcsProcess(
     file === "git" ? "git" : "gh",
@@ -409,14 +429,20 @@ function run(
         execFile(
           file,
           args,
-          { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+          {
+            timeout: timeoutMs,
+            maxBuffer: 16 * 1024 * 1024,
+            ...(env === undefined ? {} : { env }),
+          },
           (error, stdout, stderr) => {
             if (error) {
               reject(
-                new Error(
+                new GhProcessError(
                   `${file} ${args.slice(0, 3).join(" ")} failed: ${
                     stderr.trim() || error.message
                   }`,
+                  String(stdout ?? ""),
+                  String(stderr ?? ""),
                 ),
               );
             } else {
@@ -594,12 +620,12 @@ async function fetchRepoItems(
   gh: GhRunner,
   repo: string,
 ): Promise<FetchedRepo> {
-  const [owner, name] = repoNameSchema.parse(repo).split("/");
+  const { host, owner, name } = parseRepoRef(repoNameSchema.parse(repo));
   const raw = await gh([
     "api",
     "graphql",
     "--hostname",
-    GH_HOST,
+    host,
     "-f",
     `query=${repositoryListsQuery}`,
     "-f",
@@ -685,13 +711,13 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Extra repositories",
       description:
-        'Comma-separated "owner/repo" list to track in addition to repos discovered from BB projects.',
+        'Comma-separated "owner/repo" list to track in addition to repos discovered from BB projects. Use "host/owner/repo" for GitHub Enterprise Server repos.',
       experimental_schema: z.string().superRefine((value, context) => {
         const { ignored } = parseExtraRepos(value);
         if (ignored.length > 0) {
           context.addIssue({
             code: "custom",
-            message: `Use "owner/repo" for every entry. Invalid: ${ignored.join(", ")}`,
+            message: `Use "owner/repo" or "host/owner/repo" for every entry. Invalid: ${ignored.join(", ")}`,
           });
         }
       }),
@@ -748,10 +774,167 @@ export default async function plugin(bb: BbPluginApi) {
     args: string[],
     timeoutMs?: number,
     priority: VcsProcessPriority = "interactive",
+    repo?: string,
   ): Promise<string> {
     const file = await resolveGh();
-    const { stdout } = await run(file, args, timeoutMs, priority);
+    const flag = args.indexOf("-R");
+    const target = repo ?? (flag === -1 ? undefined : args[flag + 1]);
+    const account =
+      target === undefined ? null : await resolveAccount(target, priority);
+    const env =
+      account === null || account.active
+        ? undefined
+        : await accountEnv(account, priority);
+    const { stdout } = await run(file, args, timeoutMs, priority, env);
     return stdout;
+  }
+
+  function repoApi(repo: string, path: string, flags: string[] = []): string[] {
+    const ref = parseRepoRef(repo);
+    return [
+      "api",
+      ...flags,
+      `repos/${ref.path}/${path}`,
+      ...(ref.host === GH_HOST ? [] : ["--hostname", ref.host]),
+    ];
+  }
+
+  let accountsCache: { accounts: GhAccount[]; fetchedAt: number } | null = null;
+
+  async function listAccounts(): Promise<GhAccount[]> {
+    if (
+      accountsCache !== null &&
+      Date.now() - accountsCache.fetchedAt < 60_000
+    ) {
+      return accountsCache.accounts;
+    }
+    const file = await resolveGh();
+    let text: string;
+    try {
+      const { stdout, stderr } = await run(
+        file,
+        ["auth", "status"],
+        10_000,
+        "background",
+      );
+      text = `${stdout}\n${stderr}`;
+    } catch (error) {
+      text =
+        error instanceof GhProcessError
+          ? `${error.stdout}\n${error.stderr}`
+          : "";
+    }
+    const accounts = parseAuthStatus(text);
+    accountsCache = { accounts, fetchedAt: Date.now() };
+    return accounts;
+  }
+
+  const tokenCache = new Map<string, { token: string; fetchedAt: number }>();
+
+  async function accountEnv(
+    account: GhAccount,
+    priority: VcsProcessPriority,
+  ): Promise<NodeJS.ProcessEnv> {
+    const key = `${account.host}/${account.login}`;
+    let cached = tokenCache.get(key);
+    if (cached === undefined || Date.now() - cached.fetchedAt > 10 * 60_000) {
+      const file = await resolveGh();
+      const { stdout } = await run(
+        file,
+        ["auth", "token", "--hostname", account.host, "--user", account.login],
+        5_000,
+        priority,
+      );
+      cached = { token: stdout.trim(), fetchedAt: Date.now() };
+      tokenCache.set(key, cached);
+    }
+    return {
+      ...process.env,
+      GH_TOKEN: cached.token,
+      GH_ENTERPRISE_TOKEN: cached.token,
+    };
+  }
+
+  const repoAccounts = new Map<string, string>(
+    Object.entries(
+      (await bb.storage.kv.get<Record<string, string>>("repo-accounts")) ?? {},
+    ),
+  );
+  const resolving = new Map<string, Promise<GhAccount | null>>();
+
+  function forgetAccount(repo: string): void {
+    if (repoAccounts.delete(repo)) {
+      void bb.storage.kv.set("repo-accounts", Object.fromEntries(repoAccounts));
+    }
+  }
+
+  async function resolveAccount(
+    repo: string,
+    priority: VcsProcessPriority,
+  ): Promise<GhAccount | null> {
+    const { host } = parseRepoRef(repo);
+    const candidates = (await listAccounts())
+      .filter((account) => account.host === host)
+      .sort((a, b) => Number(b.active) - Number(a.active));
+    if (candidates.length <= 1) return candidates[0] ?? null;
+    const known = candidates.find(
+      (account) => account.login === repoAccounts.get(repo),
+    );
+    if (known !== undefined) return known;
+    let pending = resolving.get(repo);
+    if (pending === undefined) {
+      pending = probeAccounts(repo, candidates, priority).finally(() =>
+        resolving.delete(repo),
+      );
+      resolving.set(repo, pending);
+    }
+    return await pending;
+  }
+
+  async function probeAccounts(
+    repo: string,
+    candidates: GhAccount[],
+    priority: VcsProcessPriority,
+  ): Promise<GhAccount | null> {
+    const file = await resolveGh();
+    const ref = parseRepoRef(repo);
+    for (const account of candidates) {
+      try {
+        await run(
+          file,
+          ["api", "--hostname", ref.host, `repos/${ref.path}`, "--silent"],
+          15_000,
+          priority,
+          account.active ? undefined : await accountEnv(account, priority),
+        );
+        repoAccounts.set(repo, account.login);
+        await bb.storage.kv.set(
+          "repo-accounts",
+          Object.fromEntries(repoAccounts),
+        );
+        bb.log.info(`using gh account ${account.login} for ${repo}`);
+        return account;
+      } catch (error) {
+        if (!REPO_ACCESS_FAILURE.test(errorMessage(error))) throw error;
+      }
+    }
+    throw new Error(
+      `none of the gh accounts for ${ref.host} (${candidates
+        .map((account) => account.login)
+        .join(", ")}) can access ${repo}`,
+    );
+  }
+
+  async function accountLoginFor(repo: string): Promise<string | null> {
+    const { host } = parseRepoRef(repo);
+    const candidates = (await listAccounts()).filter(
+      (account) => account.host === host,
+    );
+    if (candidates.length === 1) return candidates[0]!.login;
+    const login = repoAccounts.get(repo);
+    return candidates.some((account) => account.login === login)
+      ? (login ?? null)
+      : null;
   }
 
   async function probeAuth(): Promise<void> {
@@ -823,7 +1006,10 @@ export default async function plugin(bb: BbPluginApi) {
               ["-C", source.path, "remote", "get-url", "origin"],
               5_000,
             );
-            const repo = parseGithubRemote(stdout);
+            const repo = repoFromRemote(
+              stdout,
+              (await listAccounts()).map((account) => account.host),
+            );
             if (repo !== null && !byRepo.has(repo)) {
               byRepo.set(repo, { repo, projectId: project.id });
             }
@@ -931,7 +1117,7 @@ export default async function plugin(bb: BbPluginApi) {
     repo?: string;
     query?: string;
     state?: "open" | "closed";
-    assignee?: string;
+    assignees?: string[];
   }): CachedItem[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
@@ -948,9 +1134,13 @@ export default async function plugin(bb: BbPluginApi) {
     } else if (options.state === "closed") {
       clauses.push("state != 'OPEN'");
     }
-    if (options.assignee !== undefined) {
-      clauses.push("assignees LIKE ?");
-      params.push(`%${JSON.stringify(options.assignee)}%`);
+    if (options.assignees !== undefined && options.assignees.length > 0) {
+      clauses.push(
+        `(${options.assignees.map(() => "assignees LIKE ?").join(" OR ")})`,
+      );
+      params.push(
+        ...options.assignees.map((login) => `%${JSON.stringify(login)}%`),
+      );
     }
     const query = options.query?.trim() ?? "";
     if (query.length > 0) {
@@ -1054,7 +1244,7 @@ export default async function plugin(bb: BbPluginApi) {
     for (const { repo } of repos) {
       try {
         const fetched = await fetchRepoItems(
-          (args) => gh(args, undefined, "background"),
+          (args) => gh(args, undefined, "background", repo),
           repo,
         );
         replaceRepoRows(repo, fetched);
@@ -1062,6 +1252,7 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (error) {
         failed += 1;
         lastFailure = errorMessage(error);
+        if (REPO_ACCESS_FAILURE.test(lastFailure)) forgetAccount(repo);
         bb.log.warn(`sync failed for ${repo}: ${lastFailure}`);
       }
     }
@@ -1225,6 +1416,12 @@ export default async function plugin(bb: BbPluginApi) {
 
   let viewerCache: { login: string; fetchedAt: number } | null = null;
 
+  async function viewerLogins(): Promise<string[]> {
+    const logins = new Set([await getViewer()]);
+    for (const account of await listAccounts()) logins.add(account.login);
+    return [...logins];
+  }
+
   async function getViewer(): Promise<string> {
     if (
       viewerCache !== null &&
@@ -1255,8 +1452,10 @@ export default async function plugin(bb: BbPluginApi) {
       return cached.users;
     }
     const raw = await gh(
-      ["api", `repos/${repo}/assignees?per_page=100`],
+      repoApi(repo, "assignees?per_page=100"),
       15_000,
+      "interactive",
+      repo,
     );
     const entries = JSON.parse(raw) as Array<{ login?: unknown }>;
     const users = entries
@@ -1272,7 +1471,12 @@ export default async function plugin(bb: BbPluginApi) {
     if (cached !== undefined && Date.now() - cached.fetchedAt < 10 * 60_000) {
       return cached.labels;
     }
-    const raw = await gh(["api", `repos/${repo}/labels?per_page=100`], 15_000);
+    const raw = await gh(
+      repoApi(repo, "labels?per_page=100"),
+      15_000,
+      "interactive",
+      repo,
+    );
     const entries = JSON.parse(raw) as Array<{ name?: unknown }>;
     const labels = entries
       .map((entry) => String(entry?.name ?? "").trim())
@@ -1292,7 +1496,12 @@ export default async function plugin(bb: BbPluginApi) {
       const cursor = await bb.storage.kv.get<{
         lastSyncedAt: string;
       }>("sync-cursor");
-      const repos = await discoverRepos();
+      const repos = await Promise.all(
+        (await discoverRepos()).map(async (info) => ({
+          ...info,
+          login: await accountLoginFor(info.repo).catch(() => null),
+        })),
+      );
       return {
         ghOk: ghState === "ready",
         ghState,
@@ -1313,13 +1522,13 @@ export default async function plugin(bb: BbPluginApi) {
           repo: input.repo,
           query: input.query,
           state: input.state,
-          assignee: input.mine === true ? await getViewer() : undefined,
+          assignees: input.mine === true ? await viewerLogins() : undefined,
         }),
       };
     },
 
     async viewer() {
-      return { login: await getViewer() };
+      return { login: await getViewer(), logins: await viewerLogins() };
     },
 
     async people() {
@@ -1468,22 +1677,22 @@ export default async function plugin(bb: BbPluginApi) {
           30_000,
         ),
         gh(
-          [
-            "api",
+          repoApi(repo, `pulls/${number}/comments?per_page=100`, [
             "--paginate",
             "--slurp",
-            `repos/${repo}/pulls/${number}/comments?per_page=100`,
-          ],
+          ]),
           30_000,
+          "interactive",
+          repo,
         ),
         gh(
-          [
-            "api",
+          repoApi(repo, `pulls/${number}/files?per_page=100`, [
             "--paginate",
             "--slurp",
-            `repos/${repo}/pulls/${number}/files?per_page=100`,
-          ],
+          ]),
           30_000,
+          "interactive",
+          repo,
         ),
       ]);
 
@@ -1749,7 +1958,13 @@ export default async function plugin(bb: BbPluginApi) {
       const match = stdout.trim().match(/\/issues\/(\d+)\s*$/);
       const number = match !== null ? Number(match[1]) : null;
       try {
-        replaceRepoRows(input.repo, await fetchRepoItems(gh, input.repo));
+        replaceRepoRows(
+          input.repo,
+          await fetchRepoItems(
+            (args) => gh(args, undefined, "interactive", input.repo),
+            input.repo,
+          ),
+        );
         bb.realtime.publish("data-changed", {});
       } catch {}
       return { number, url: stdout.trim() };

@@ -86,7 +86,12 @@ it.each([0, 1, 34])(
     expect(lists()).toHaveLength(count);
     await vi.advanceTimersByTimeAsync(1);
     expect(lists()).toHaveLength(2 * count);
-    expect(fake.calls.filter((args) => args[0] === "auth")).toHaveLength(3);
+    const listsAccounts = (args: string[]) =>
+      args.length === 2 && args[0] === "auth" && args[1] === "status";
+    expect(
+      fake.calls.filter((args) => args[0] === "auth" && !listsAccounts(args)),
+    ).toHaveLength(3);
+    expect(fake.calls.filter(listsAccounts).length).toBeLessThanOrEqual(2);
     controller.abort();
     await done;
     expect(vi.getTimerCount()).toBe(0);

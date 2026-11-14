@@ -15,18 +15,18 @@ export type Route =
 
 export function parseSubPath(subPath: string): Route {
   const parts = subPath.split("/").filter((part) => part.length > 0);
-  if (parts[0] === "pulls" && parts.length === 4) {
-    const number = Number(parts[3]);
+  if (parts[0] === "pulls" && (parts.length === 4 || parts.length === 5)) {
+    const number = Number(parts[parts.length - 1]);
     if (Number.isFinite(number)) {
-      return { view: "pull", repo: `${parts[1]}/${parts[2]}`, number };
+      return { view: "pull", repo: parts.slice(1, -1).join("/"), number };
     }
   }
   if (parts[0] === "pulls") return { view: "pulls" };
   if (parts[0] === "new") return { view: "new" };
-  if (parts[0] === "issues" && parts.length === 4) {
-    const number = Number(parts[3]);
+  if (parts[0] === "issues" && (parts.length === 4 || parts.length === 5)) {
+    const number = Number(parts[parts.length - 1]);
     if (Number.isFinite(number)) {
-      return { view: "issue", repo: `${parts[1]}/${parts[2]}`, number };
+      return { view: "issue", repo: parts.slice(1, -1).join("/"), number };
     }
   }
   return { view: "issues" };
@@ -154,24 +154,25 @@ export function parseQuery(query: string): ParsedQuery {
 export function matchesQuery(
   item: Item,
   query: ParsedQuery,
-  viewer: string | null,
+  viewer: string | readonly string[] | null,
 ): boolean {
+  const me = (
+    viewer === null ? [] : typeof viewer === "string" ? [viewer] : viewer
+  ).map((login) => login.toLowerCase());
+  const expand = (logins: string[]) =>
+    logins.flatMap((login) => (login === "@me" ? me : [login]));
   if (query.states.length > 0 && !query.states.includes(item.state)) {
     return false;
   }
   if (query.assignees.length > 0) {
-    const wanted = query.assignees.map((login) =>
-      login === "@me" ? (viewer?.toLowerCase() ?? "\u0000") : login,
-    );
+    const wanted = expand(query.assignees);
     if (!item.assignees.some((login) => wanted.includes(login.toLowerCase()))) {
       return false;
     }
   }
   if (query.authors.length > 0) {
     const author = item.author.toLowerCase();
-    const wanted = query.authors.map((login) =>
-      login === "@me" ? (viewer?.toLowerCase() ?? "\u0000") : login,
-    );
+    const wanted = expand(query.authors);
     if (!wanted.includes(author)) return false;
   }
   if (query.labels.length > 0) {
