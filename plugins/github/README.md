@@ -47,6 +47,22 @@ bb plugin config github set extraRepos "owner/repo, owner/other"
 bb plugin reload github
 ```
 
+## List columns
+
+The issue and pull request lists show ID, Repo, Title, Assignee, Status, and
+Updated by default. Repo shows the repository name, or `owner/repo` when two
+tracked owners share a name; hover it for the full name. Pick columns from the
+**Columns** menu next to the tabs, or set the ordered `columns` setting:
+
+```
+bb plugin config github set columns "repo, id, title, status"
+bb plugin config github unset columns
+```
+
+Available columns: `id`, `repo`, `title`, `assignee`, `status`, `updated`.
+Title is always shown; unknown names are rejected. Changes apply to open
+panels immediately.
+
 A background service refreshes immediately on startup, then waits 15 minutes
 after each completed sync. Each tracked repository uses one bounded `gh api graphql`
 request per sweep, using the existing GitHub CLI authentication. It fetches

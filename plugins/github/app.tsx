@@ -24,6 +24,13 @@ import {
   type Suggestion,
   type SuggestionIcon,
 } from "./app-logic.js";
+import {
+  COLUMN_IDS,
+  COLUMN_LABELS,
+  repoLabels,
+  toggleColumn,
+  type ColumnId,
+} from "./columns.js";
 import type { githubRpcContract } from "./server.js";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -117,6 +124,38 @@ function useItems(kind: "issue" | "pr"): {
   }, [refetch]);
   useRealtime("data-changed", refetch);
   return state;
+}
+
+function useColumns(): {
+  columns: ColumnId[] | null;
+  setColumns: (next: ColumnId[]) => void;
+} {
+  const rpc = useRpc<typeof githubRpcContract>();
+  const [columns, setColumnsState] = useState<ColumnId[] | null>(null);
+  const refetch = useCallback(() => {
+    rpc.call("columns").then(
+      (result) => setColumnsState(result.columns),
+      () => setColumnsState([...COLUMN_IDS]),
+    );
+  }, [rpc]);
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+  useRealtime("columns-changed", refetch);
+  const setColumns = useCallback(
+    (next: ColumnId[]) => {
+      setColumnsState(next);
+      rpc.call("setColumns", { columns: next }).then(
+        (result) => setColumnsState(result.columns),
+        (error: unknown) => {
+          toast.error(errorText(error));
+          refetch();
+        },
+      );
+    },
+    [rpc, refetch],
+  );
+  return { columns, setColumns };
 }
 
 function useLinks(): LinksMap {
@@ -492,14 +531,57 @@ function FilterBar({
   );
 }
 
-const COL = {
+const COL: Record<ColumnId | "actions", string> = {
   id: "shrink-0 @[48rem]:w-12",
+  repo: "min-w-0 max-w-40 shrink truncate @[48rem]:w-32 @[48rem]:max-w-none @[48rem]:shrink-0",
+  title:
+    "order-first flex min-w-0 basis-full flex-col items-start gap-1.5 @[48rem]:order-none @[48rem]:flex-1 @[48rem]:basis-auto @[48rem]:flex-row @[48rem]:items-center @[48rem]:gap-2",
   assignee: "shrink-0 @[48rem]:w-20",
   status: "shrink-0 @[48rem]:w-24",
   updated: "hidden w-14 shrink-0 text-right @[48rem]:block",
   actions:
     "ml-auto flex shrink-0 items-center justify-end gap-1 @[48rem]:ml-0 @[48rem]:w-24",
-} as const;
+};
+
+const ROW_CLASS =
+  "flex flex-wrap items-center gap-2 px-3 py-3 @[48rem]:flex-nowrap @[48rem]:gap-3 @[48rem]:py-2";
+
+function ColumnsMenu({
+  columns,
+  onChange,
+}: {
+  columns: ColumnId[] | null;
+  onChange: (next: ColumnId[]) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={columns === null}>
+        <Button size="sm" variant="outline" aria-label="Choose list columns">
+          Columns
+          <ChevronDownIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Columns</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {COLUMN_IDS.map((column) => (
+          <DropdownMenuCheckboxItem
+            key={column}
+            checked={columns?.includes(column) ?? false}
+            disabled={column === "title" || columns === null}
+            onCheckedChange={(checked) => {
+              if (columns === null) return;
+              onChange(toggleColumn(columns, column, checked === true));
+            }}
+            onSelect={(event) => event.preventDefault()}
+          >
+            {COLUMN_LABELS[column]}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function AssigneeCell({ assignees }: { assignees: string[] }) {
   if (assignees.length === 0) {
@@ -643,101 +725,148 @@ function RowMenu({ item }: { item: Item }) {
   );
 }
 
-function ItemRow({
+function ItemCell({
+  column,
   item,
   links,
+  repoLabel,
+}: {
+  column: ColumnId;
+  item: Item;
+  links: ThreadLink[] | undefined;
+  repoLabel: string;
+}) {
+  switch (column) {
+    case "id":
+      return (
+        <span className={`${COL.id} font-mono text-xs text-muted-foreground`}>
+          #{item.number}
+        </span>
+      );
+    case "repo":
+      return (
+        <span
+          className={`${COL.repo} text-xs text-muted-foreground`}
+          title={item.repo}
+        >
+          {repoLabel}
+        </span>
+      );
+    case "title":
+      return (
+        <span className={COL.title}>
+          <span className="min-w-0 flex-1 line-clamp-3 text-sm font-medium leading-snug text-foreground @[48rem]:line-clamp-1 @[48rem]:leading-normal">
+            {item.title}
+          </span>
+          <LabelChips
+            labels={item.labels}
+            className="hidden shrink-0 @[60rem]:flex"
+          />
+          <ThreadPills links={links} />
+        </span>
+      );
+    case "assignee":
+      return (
+        <span
+          className={`${COL.assignee} ${item.assignees.length === 0 ? "hidden @[48rem]:flex" : "flex"} text-xs text-muted-foreground`}
+        >
+          <AssigneeCell assignees={item.assignees} />
+        </span>
+      );
+    case "status":
+      return (
+        <span className={COL.status}>
+          <StatusCell item={item} />
+        </span>
+      );
+    case "updated":
+      return (
+        <span className={`${COL.updated} text-xs text-muted-foreground`}>
+          {relativeTime(item.updatedAt)}
+        </span>
+      );
+  }
+}
+
+function ItemRow({
+  item,
+  columns,
+  links,
+  repoLabel,
   onOpen,
 }: {
   item: Item;
+  columns: ColumnId[];
   links: ThreadLink[] | undefined;
+  repoLabel: string;
   onOpen: () => void;
 }) {
   const { spawn, spawningKey } = useSpawn();
   const busy = spawningKey === `${item.repo}#${item.number}`;
   return (
     <div
-      className="grid cursor-pointer grid-cols-1 gap-y-2 px-3 py-3 hover:bg-accent/50 @[48rem]:flex @[48rem]:items-center @[48rem]:gap-3 @[48rem]:py-2"
+      className={`${ROW_CLASS} cursor-pointer hover:bg-accent/50`}
       onClick={onOpen}
     >
-      <span className="flex min-w-0 flex-col items-start gap-1.5 @[48rem]:order-2 @[48rem]:flex-1 @[48rem]:flex-row @[48rem]:items-center @[48rem]:gap-2">
-        <span className="min-w-0 flex-1 line-clamp-3 text-sm font-medium leading-snug text-foreground @[48rem]:line-clamp-1 @[48rem]:leading-normal">
-          {item.title}
-        </span>
-        <LabelChips
-          labels={item.labels}
-          className="hidden shrink-0 @[60rem]:flex"
+      {columns.map((column) => (
+        <ItemCell
+          key={column}
+          column={column}
+          item={item}
+          links={links}
+          repoLabel={repoLabel}
         />
-        <ThreadPills links={links} />
-      </span>
-      <span className="flex min-w-0 items-center gap-2 @[48rem]:contents">
-        <span
-          className={`${COL.id} font-mono text-xs text-muted-foreground @[48rem]:order-1`}
+      ))}
+      <span className={COL.actions}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7"
+          disabled={spawningKey !== null}
+          onClick={(event) => {
+            event.stopPropagation();
+            spawn(
+              item.kind === "issue" ? "startWork" : "startReview",
+              item.repo,
+              item.number,
+            );
+          }}
         >
-          #{item.number}
-        </span>
-        <span
-          className={`${COL.assignee} ${item.assignees.length === 0 ? "hidden @[48rem]:flex" : "flex"} text-xs text-muted-foreground @[48rem]:order-3`}
-        >
-          <AssigneeCell assignees={item.assignees} />
-        </span>
-        <span className={`${COL.status} @[48rem]:order-4`}>
-          <StatusCell item={item} />
-        </span>
-        <span
-          className={`${COL.updated} text-xs text-muted-foreground @[48rem]:order-5`}
-        >
-          {relativeTime(item.updatedAt)}
-        </span>
-        <span className={`${COL.actions} @[48rem]:order-6`}>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7"
-            disabled={spawningKey !== null}
-            onClick={(event) => {
-              event.stopPropagation();
-              spawn(
-                item.kind === "issue" ? "startWork" : "startReview",
-                item.repo,
-                item.number,
-              );
-            }}
-          >
-            {busy ? "…" : item.kind === "issue" ? "Start" : "Review"}
-          </Button>
-          <RowMenu item={item} />
-        </span>
+          {busy ? "…" : item.kind === "issue" ? "Start" : "Review"}
+        </Button>
+        <RowMenu item={item} />
       </span>
     </div>
   );
 }
 
-function TableSkeleton() {
+const SKELETON_CELL: Record<ColumnId, string> = {
+  id: "h-3 w-10",
+  repo: "h-3 w-20",
+  title: "h-3 w-4/5",
+  assignee: "size-5 rounded-full @[48rem]:h-3 @[48rem]:w-16",
+  status: "h-3 w-16",
+  updated: "ml-auto h-3 w-12",
+};
+
+function TableSkeleton({ columns }: { columns: ColumnId[] }) {
   return (
     <DelayedLoading>
       <div className="divide-y divide-border">
         {[0, 1, 2, 3].map((row) => (
-          <div
-            key={row}
-            className="grid grid-cols-1 gap-y-3 px-3 py-3 @[48rem]:flex @[48rem]:items-center @[48rem]:gap-3"
-          >
-            <Skeleton className="h-3 w-4/5 @[48rem]:order-2 @[48rem]:flex-1" />
-            <span className="flex items-center gap-2 @[48rem]:contents">
-              <span className={`${COL.id} @[48rem]:order-1`}>
-                <Skeleton className="h-3 w-10" />
+          <div key={row} className={ROW_CLASS}>
+            {columns.map((column) => (
+              <span
+                key={column}
+                className={
+                  column === "assignee" ? `${COL.assignee} flex` : COL[column]
+                }
+              >
+                <Skeleton className={SKELETON_CELL[column]} />
               </span>
-              <span className={`${COL.assignee} flex @[48rem]:order-3`}>
-                <Skeleton className="size-5 rounded-full @[48rem]:h-3 @[48rem]:w-16" />
-              </span>
-              <span className={`${COL.status} @[48rem]:order-4`}>
-                <Skeleton className="h-3 w-16" />
-              </span>
-              <span className={`${COL.updated} @[48rem]:order-5`}>
-                <Skeleton className="ml-auto h-3 w-12" />
-              </span>
-              <span className={`${COL.actions} @[48rem]:order-6`}>
-                <Skeleton className="h-7 w-20" />
-              </span>
+            ))}
+            <span className={COL.actions}>
+              <Skeleton className="h-7 w-20" />
             </span>
           </div>
         ))}
@@ -761,23 +890,32 @@ function DetailSkeleton() {
 function ItemsTable({
   kind,
   items,
+  columns,
+  repos,
   error,
   hasFilter,
   onOpenItem,
 }: {
   kind: "issue" | "pr";
   items: Item[] | null;
+  columns: ColumnId[] | null;
+  repos: RepoInfo[];
   error: string | null;
   hasFilter: boolean;
   onOpenItem: (repo: string, number: number) => void;
 }) {
   const links = useLinks();
+  const labels = useMemo(
+    () => repoLabels(repos.map((info) => info.repo)),
+    [repos],
+  );
+  const shown = columns ?? [...COLUMN_IDS];
 
   let body: React.ReactNode;
   if (error !== null) {
     body = <EmptyState message={error} />;
-  } else if (items === null) {
-    body = <TableSkeleton />;
+  } else if (items === null || columns === null) {
+    body = <TableSkeleton columns={shown} />;
   } else if (items.length === 0) {
     body = (
       <EmptyState
@@ -795,7 +933,9 @@ function ItemsTable({
           <ItemRow
             key={`${item.repo}#${item.number}`}
             item={item}
+            columns={columns}
             links={links[`${kind}:${item.repo}#${item.number}`]}
+            repoLabel={labels.get(item.repo) ?? item.repo}
             onOpen={() => onOpenItem(item.repo, item.number)}
           />
         ))}
@@ -806,11 +946,14 @@ function ItemsTable({
   return (
     <div className="@container overflow-hidden rounded-lg border border-border bg-card">
       <div className="hidden items-center gap-3 border-b border-border bg-muted/50 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground @[48rem]:flex">
-        <span className={COL.id}>ID</span>
-        <span className="min-w-0 flex-1">Title</span>
-        <span className={COL.assignee}>Assignee</span>
-        <span className={COL.status}>Status</span>
-        <span className={COL.updated}>Updated</span>
+        {shown.map((column) => (
+          <span
+            key={column}
+            className={column === "title" ? "min-w-0 flex-1" : COL[column]}
+          >
+            {COLUMN_LABELS[column]}
+          </span>
+        ))}
         <span className={COL.actions} />
       </div>
       {body}
@@ -2076,12 +2219,14 @@ function ListView({
   query,
   setQuery,
   repos,
+  columns,
   onOpenItem,
 }: {
   kind: "issue" | "pr";
   query: string;
   setQuery: (query: string) => void;
   repos: RepoInfo[];
+  columns: ColumnId[] | null;
   onOpenItem: (repo: string, number: number) => void;
 }) {
   const { items, error } = useItems(kind);
@@ -2106,6 +2251,8 @@ function ListView({
       <ItemsTable
         kind={kind}
         items={filtered}
+        columns={columns}
+        repos={repos}
         error={error}
         hasFilter={query.trim().length > 0}
         onOpenItem={onOpenItem}
@@ -2137,6 +2284,7 @@ function GithubPanelBody({
     },
     [navigate],
   );
+  const { columns, setColumns } = useColumns();
   if (status !== null && status.ghState === "unavailable") {
     return (
       <EmptyState
@@ -2209,6 +2357,7 @@ function GithubPanelBody({
           </TabsList>
         </Tabs>
         <div className="flex-1" />
+        <ColumnsMenu columns={columns} onChange={setColumns} />
         {route.view === "issues" ? (
           <Button size="sm" onClick={() => navigate({ view: "new" })}>
             New issue
@@ -2221,6 +2370,7 @@ function GithubPanelBody({
         query={query}
         setQuery={setQuery}
         repos={status?.repos ?? []}
+        columns={columns}
         onOpenItem={(repo, number) => openItem(kind, repo, number)}
       />
     </div>

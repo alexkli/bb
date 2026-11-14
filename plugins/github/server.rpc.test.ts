@@ -214,6 +214,42 @@ async function loadPlugin(extraRepos = "acme/widgets") {
 }
 
 describe("github plugin RPC behavior", () => {
+  it("reads, writes, and announces the list columns setting", async () => {
+    const { harness } = await loadPlugin();
+
+    await expect(harness.callRpc("columns")).resolves.toEqual({
+      columns: ["id", "repo", "title", "assignee", "status", "updated"],
+    });
+
+    await expect(
+      harness.callRpc("setColumns", { columns: ["repo", "title", "status"] }),
+    ).resolves.toEqual({ columns: ["repo", "title", "status"] });
+    await expect(harness.callRpc("columns")).resolves.toEqual({
+      columns: ["repo", "title", "status"],
+    });
+    expect(
+      harness.realtimeSignals.filter(
+        (signal) => signal.channel === "columns-changed",
+      ),
+    ).toHaveLength(1);
+
+    await expect(
+      harness.callRpc("setColumns", { columns: ["labels"] }),
+    ).rejects.toThrow();
+  });
+
+  it("honors a columns setting written from the CLI, keeping title visible", async () => {
+    const host = createFakePluginHost({
+      pluginId: "github",
+      settings: { extraRepos: "acme/widgets", columns: "status, Repo" },
+    });
+    await plugin(host.bb);
+
+    await expect(host.harness.callRpc("columns")).resolves.toEqual({
+      columns: ["title", "status", "repo"],
+    });
+  });
+
   it("reports extraRepos entries it cannot honor instead of dropping them", async () => {
     const { harness } = await loadPlugin("acme/widgets, ACME-ORG/*, nonsense");
 

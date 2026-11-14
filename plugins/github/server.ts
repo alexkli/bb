@@ -12,6 +12,11 @@ import {
   type PluginCliResult,
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import {
+  COLUMN_IDS,
+  DEFAULT_COLUMNS_SETTING,
+  parseColumns,
+} from "./columns.js";
 
 const SYNC_INTERVAL_MS = 15 * 60_000;
 const SYNC_RETRY_MAX_MS = 5 * 60_000;
@@ -58,6 +63,9 @@ const syncResultSchema = z
   })
   .strict();
 const okResultSchema = z.object({ ok: z.literal(true) }).strict();
+const columnsResultSchema = z
+  .object({ columns: z.array(z.enum(COLUMN_IDS)).min(1) })
+  .strict();
 const commentSchema = z
   .object({ author: z.string(), body: z.string(), createdAt: z.string() })
   .strict();
@@ -164,6 +172,14 @@ export const githubRpcContract = defineRpcContract({
   viewer: {
     input: z.null(),
     output: z.object({ login: z.string().min(1) }).strict(),
+  },
+  columns: {
+    input: z.null(),
+    output: columnsResultSchema,
+  },
+  setColumns: {
+    input: columnsResultSchema,
+    output: columnsResultSchema,
   },
   assignableUsers: {
     input: z.object({ repo: repoNameSchema }).strict(),
@@ -565,6 +581,27 @@ export default async function plugin(bb: BbPluginApi) {
       description:
         "Where agent threads spawn for repos that are not attached to a BB project.",
     },
+    columns: {
+      type: "string",
+      label: "List columns",
+      description: `Comma-separated, ordered list of columns for the issue and pull request lists. Available: ${COLUMN_IDS.join(", ")}. Title is always shown.`,
+      experimental_schema: z.string().superRefine((value, context) => {
+        const { ignored } = parseColumns(value);
+        if (ignored.length > 0) {
+          context.addIssue({
+            code: "custom",
+            message: `Unknown column: ${ignored.join(", ")}. Available: ${COLUMN_IDS.join(", ")}`,
+          });
+        }
+      }),
+      default: DEFAULT_COLUMNS_SETTING,
+    },
+  });
+
+  settings.onChange((next, prev) => {
+    if (next.columns !== prev.columns) {
+      bb.realtime.publish("columns-changed", {});
+    }
   });
 
   let ghPath: string | null = null;
@@ -1120,6 +1157,17 @@ export default async function plugin(bb: BbPluginApi) {
 
     async viewer() {
       return { login: await getViewer() };
+    },
+
+    async columns() {
+      return { columns: parseColumns((await settings.get()).columns).columns };
+    },
+
+    async setColumns(input) {
+      const next = await settings.experimental_set({
+        columns: input.columns.join(", "),
+      });
+      return { columns: parseColumns(next.columns).columns };
     },
 
     async assignableUsers(input) {
