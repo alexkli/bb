@@ -61,11 +61,17 @@ describe("toggling columns", () => {
 });
 
 describe("repo labels", () => {
-  it("uses the short name unless two owners share it", () => {
-    const labels = repoLabels(["acme/widgets", "acme/api", "other/API"]);
+  it("uses the short name unless two repos share it", () => {
+    const labels = repoLabels([
+      "acme/widgets",
+      "acme/api",
+      "other/API",
+      "git.corp.example.com/team/tool",
+    ]);
     expect(labels.get("acme/widgets")).toBe("widgets");
     expect(labels.get("acme/api")).toBe("acme/api");
     expect(labels.get("other/API")).toBe("other/API");
+    expect(labels.get("git.corp.example.com/team/tool")).toBe("tool");
   });
 });
 

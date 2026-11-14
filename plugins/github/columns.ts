@@ -1,3 +1,5 @@
+import { parseRepoRef } from "./repo-ref.js";
+
 export const COLUMN_IDS = [
   "id",
   "repo",
@@ -124,15 +126,15 @@ export function moveColumn(
 export function repoLabels(repos: readonly string[]): Map<string, string> {
   const nameCounts = new Map<string, number>();
   for (const repo of repos) {
-    const name = repo.slice(repo.lastIndexOf("/") + 1).toLowerCase();
+    const name = parseRepoRef(repo).name.toLowerCase();
     nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
   }
   const labels = new Map<string, string>();
   for (const repo of repos) {
-    const name = repo.slice(repo.lastIndexOf("/") + 1);
+    const { name, path } = parseRepoRef(repo);
     labels.set(
       repo,
-      (nameCounts.get(name.toLowerCase()) ?? 0) > 1 ? repo : name,
+      (nameCounts.get(name.toLowerCase()) ?? 0) > 1 ? path : name,
     );
   }
   return labels;

@@ -271,6 +271,25 @@ describe("github plugin RPC behavior", () => {
     });
   });
 
+  it("drops cached items of repos that are no longer tracked", async () => {
+    const host = createFakePluginHost({
+      pluginId: "github",
+      settings: { extraRepos: "acme/widgets" },
+      sdk: { projects: { list: async () => [] } },
+    });
+    await plugin(host.bb);
+    await host.harness.callRpc("refresh");
+    await expect(host.harness.callRpc("listItems", {})).resolves.toMatchObject({
+      items: expect.arrayContaining([expect.anything()]),
+    });
+
+    await host.harness.setSettings({ extraRepos: "" });
+    await host.harness.callRpc("refresh");
+    await expect(host.harness.callRpc("listItems", {})).resolves.toEqual({
+      items: [],
+    });
+  });
+
   it("reports extraRepos entries it cannot honor instead of dropping them", async () => {
     const { harness } = await loadPlugin("acme/widgets, ACME-ORG/*, nonsense");
 

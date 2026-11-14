@@ -1028,7 +1028,11 @@ export default async function plugin(bb: BbPluginApi) {
     return authProbe;
   }
 
-  let repoCache: { repos: RepoInfo[]; fetchedAt: number } | null = null;
+  let repoCache: {
+    repos: RepoInfo[];
+    complete: boolean;
+    fetchedAt: number;
+  } | null = null;
 
   let ignoredExtraRepos: string[] = [];
   let lastIgnoredExtraReposKey: string | null = null;
@@ -1042,6 +1046,7 @@ export default async function plugin(bb: BbPluginApi) {
       return repoCache.repos;
     }
     const byRepo = new Map<string, RepoInfo>();
+    let complete = true;
     try {
       const projects = await bb.sdk.projects.list();
       for (const project of projects) {
@@ -1064,6 +1069,7 @@ export default async function plugin(bb: BbPluginApi) {
         }
       }
     } catch (error) {
+      complete = false;
       bb.log.warn(`project discovery failed: ${errorMessage(error)}`);
     }
     const { extraRepos } = await settings.get();
@@ -1082,7 +1088,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
     ignoredExtraRepos = parsed.ignored;
     const repos = [...byRepo.values()];
-    repoCache = { repos, fetchedAt: Date.now() };
+    repoCache = { repos, complete, fetchedAt: Date.now() };
     return repos;
   }
 
@@ -1301,6 +1307,17 @@ export default async function plugin(bb: BbPluginApi) {
         lastFailure = errorMessage(error);
         if (REPO_ACCESS_FAILURE.test(lastFailure)) forgetAccount(repo);
         bb.log.warn(`sync failed for ${repo}: ${lastFailure}`);
+      }
+    }
+    if (repoCache?.complete === true) {
+      const tracked = repos.map(({ repo }) => repo);
+      const pruned = db
+        .prepare(
+          `DELETE FROM items WHERE repo NOT IN (${tracked.map(() => "?").join(", ")})`,
+        )
+        .run(...tracked).changes;
+      if (pruned > 0) {
+        bb.log.info(`removed ${pruned} cached item(s) of untracked repos`);
       }
     }
     if (repos.length > 0 && failed === repos.length) {

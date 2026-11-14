@@ -1001,15 +1001,22 @@ function ItemCell({
           #{item.number}
         </span>
       );
-    case "repo":
+    case "repo": {
+      const { host } = parseRepoRef(item.repo);
       return (
         <span
           className={`${COL.repo} text-xs text-muted-foreground`}
           title={item.repo}
         >
-          {repoLabel}
+          {host === GITHUB_HOST ? null : (
+            <span className="block truncate text-2xs leading-tight opacity-70">
+              {host}
+            </span>
+          )}
+          <span className="block truncate leading-tight">{repoLabel}</span>
         </span>
       );
+    }
     case "title":
       return (
         <span className={COL.title}>
@@ -1281,8 +1288,14 @@ function ItemsTable({
   onOpenItem: (repo: string, number: number) => void;
 }) {
   const labels = useMemo(
-    () => repoLabels(repos.map((info) => info.repo)),
-    [repos],
+    () =>
+      repoLabels([
+        ...new Set([
+          ...repos.map((info) => info.repo),
+          ...(items ?? []).map((item) => item.repo),
+        ]),
+      ]),
+    [repos, items],
   );
   const shown = columnsForKind(columns ?? DEFAULT_COLUMNS, kind);
   const { widths, setWidths } = useContext(ColumnWidthsContext);
