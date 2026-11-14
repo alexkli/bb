@@ -29,9 +29,9 @@ beforeEach(() => {
       number: 7,
       title: "Cache mutations",
       state: "OPEN",
-      author: { login: "alice", id: "user-alice" },
+      author: { login: "alice", id: "user-alice", name: "Alice Liddell" },
       labels: { nodes: [{ name: "bug" }, { name: "old" }] },
-      assignees: { nodes: [{ login: "octocat" }] },
+      assignees: { nodes: [{ login: "octocat", name: null }] },
       url: "https://github.com/acme/widgets/issues/7",
       body: "Keep the cache synchronized.",
       createdAt: "2026-08-18T12:00:00Z",
@@ -231,16 +231,7 @@ describe("github plugin RPC behavior", () => {
     const { harness } = await loadPlugin();
 
     await expect(harness.callRpc("columns")).resolves.toEqual({
-      columns: [
-        "id",
-        "repo",
-        "title",
-        "labels",
-        "author",
-        "assignee",
-        "status",
-        "updated",
-      ],
+      columns: ["id", "repo", "title", "assignee", "status", "updated"],
     });
 
     await expect(
@@ -398,6 +389,9 @@ describe("github plugin RPC behavior", () => {
     await expect(harness.callRpc("refresh")).resolves.toEqual({
       repos: 1,
       items: 2,
+    });
+    await expect(harness.callRpc("people")).resolves.toEqual({
+      names: { alice: "Alice Liddell" },
     });
     await expect(
       harness.callRpc("listItems", { kind: "pr" }),

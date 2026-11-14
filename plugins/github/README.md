@@ -49,8 +49,8 @@ bb plugin reload github
 
 ## List columns
 
-The issue and pull request lists show ID, Repo, Title, Labels, Author,
-Assignee, Status, and Updated by default. Repo shows the repository name, or
+The issue and pull request lists show ID, Repo, Title, Assignee, Status, and
+Updated by default. Repo shows the repository name, or
 `owner/repo` when two tracked owners share a name; hover it for the full name.
 Pick columns from the **Columns** menu next to the tabs, or set the ordered
 `columns` setting:
@@ -66,8 +66,8 @@ bb plugin config github unset columns
 | `repo`      | Repository                                                       |
 | `title`     | Title; always shown                                              |
 | `labels`    | Label chips that fit, then a `+N` count; hover for all           |
-| `author`    | Who opened it; GitHub Apps are marked `(app)`                    |
-| `assignee`  | Assignee avatars                                                 |
+| `author`    | Avatar of who opened it; hover for name and @handle              |
+| `assignee`  | Assignee avatars; hover for name and @handle                     |
 | `status`    | Open/closed/merged state                                         |
 | `review`    | PRs only: approved, changes requested, or review required        |
 | `checks`    | PRs only: CI rollup of the head commit (success/failure/pending) |

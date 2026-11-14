@@ -192,6 +192,10 @@ export const githubRpcContract = defineRpcContract({
     input: z.null(),
     output: columnsResultSchema,
   },
+  people: {
+    input: z.null(),
+    output: z.object({ names: z.record(z.string(), z.string()) }).strict(),
+  },
   setColumns: {
     input: columnsResultSchema,
     output: columnsResultSchema,
@@ -460,10 +464,23 @@ const listNodeSchema = z.object({
   number: itemNumberSchema,
   title: z.string(),
   state: z.enum(["OPEN", "CLOSED", "MERGED"]),
-  author: z.object({ login: z.string(), id: z.string().optional() }).nullable(),
+  author: z
+    .object({
+      login: z.string(),
+      id: z.string().optional(),
+      name: z.string().nullable().optional(),
+    })
+    .nullable(),
   labels: z.object({ nodes: z.array(z.object({ name: z.string() })).max(100) }),
   assignees: z.object({
-    nodes: z.array(z.object({ login: z.string() })).max(100),
+    nodes: z
+      .array(
+        z.object({
+          login: z.string(),
+          name: z.string().nullable().optional(),
+        }),
+      )
+      .max(100),
   }),
   url: z.string(),
   body: z.string(),
@@ -530,9 +547,9 @@ const repositoryListsSchema = z.object({
   errors: z.array(z.unknown()).max(0).optional(),
 });
 const listFields = `
-  number title state author { login ... on User { id } }
+  number title state author { login ... on User { id name } }
   labels(first: 100) { nodes { name } }
-  assignees(first: 100) { nodes { login } }
+  assignees(first: 100) { nodes { login name } }
   url body createdAt updatedAt
   comments { totalCount }
   milestone { title }
@@ -568,10 +585,15 @@ function checksState(
   return null;
 }
 
+interface FetchedRepo {
+  items: CachedItem[];
+  people: Map<string, string>;
+}
+
 async function fetchRepoItems(
   gh: GhRunner,
   repo: string,
-): Promise<CachedItem[]> {
+): Promise<FetchedRepo> {
   const [owner, name] = repoNameSchema.parse(repo).split("/");
   const raw = await gh([
     "api",
@@ -624,16 +646,37 @@ async function fetchRepoItems(
             }
           : null,
     }));
-  return [
+  const people = new Map<string, string>();
+  const nodes = [
     ...(repository.hasIssuesEnabled
-      ? [
-          ...toItems(repository.openIssues.nodes, "issue"),
-          ...toItems(repository.closedIssues.nodes, "issue"),
-        ]
+      ? [...repository.openIssues.nodes, ...repository.closedIssues.nodes]
       : []),
-    ...toItems(repository.openPrs.nodes, "pr"),
-    ...toItems(repository.closedPrs.nodes, "pr"),
+    ...repository.openPrs.nodes,
+    ...repository.closedPrs.nodes,
   ];
+  for (const node of nodes) {
+    const users = [
+      ...(node.author?.id ? [node.author] : []),
+      ...node.assignees.nodes,
+    ];
+    for (const user of users) {
+      const name = user.name?.trim() ?? "";
+      if (name.length > 0) people.set(user.login, name);
+    }
+  }
+  return {
+    items: [
+      ...(repository.hasIssuesEnabled
+        ? [
+            ...toItems(repository.openIssues.nodes, "issue"),
+            ...toItems(repository.closedIssues.nodes, "issue"),
+          ]
+        : []),
+      ...toItems(repository.openPrs.nodes, "pr"),
+      ...toItems(repository.closedPrs.nodes, "pr"),
+    ],
+    people,
+  };
 }
 
 export default async function plugin(bb: BbPluginApi) {
@@ -830,6 +873,10 @@ export default async function plugin(bb: BbPluginApi) {
     `ALTER TABLE items ADD COLUMN comments INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE items ADD COLUMN milestone TEXT`,
     `ALTER TABLE items ADD COLUMN pr TEXT`,
+    `CREATE TABLE IF NOT EXISTS people (
+       login TEXT PRIMARY KEY,
+       name TEXT NOT NULL
+     )`,
   ]);
 
   const cachedPrSchema = itemSchema.shape.pr;
@@ -931,12 +978,18 @@ export default async function plugin(bb: BbPluginApi) {
     return row === undefined ? null : rowToItem(row);
   }
 
-  function replaceRepoRows(repo: string, items: CachedItem[]): void {
+  function replaceRepoRows(repo: string, fetched: FetchedRepo): void {
+    const { items } = fetched;
+    const upsertPerson = db.prepare(
+      `INSERT INTO people (login, name) VALUES (?, ?)
+       ON CONFLICT(login) DO UPDATE SET name = excluded.name`,
+    );
     const insert = db.prepare(
       `INSERT INTO items (repo, number, kind, title, state, author, labels, assignees, url, body, created_at, updated_at, comments, milestone, pr)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     db.transaction(() => {
+      for (const [login, name] of fetched.people) upsertPerson.run(login, name);
       db.prepare("DELETE FROM items WHERE repo = ?").run(repo);
       for (const item of items) {
         insert.run(
@@ -1000,12 +1053,12 @@ export default async function plugin(bb: BbPluginApi) {
     let lastFailure = "";
     for (const { repo } of repos) {
       try {
-        const items = await fetchRepoItems(
+        const fetched = await fetchRepoItems(
           (args) => gh(args, undefined, "background"),
           repo,
         );
-        replaceRepoRows(repo, items);
-        total += items.length;
+        replaceRepoRows(repo, fetched);
+        total += fetched.items.length;
       } catch (error) {
         failed += 1;
         lastFailure = errorMessage(error);
@@ -1267,6 +1320,16 @@ export default async function plugin(bb: BbPluginApi) {
 
     async viewer() {
       return { login: await getViewer() };
+    },
+
+    async people() {
+      const rows = db.prepare("SELECT login, name FROM people").all() as {
+        login: string;
+        name: string;
+      }[];
+      return {
+        names: Object.fromEntries(rows.map((row) => [row.login, row.name])),
+      };
     },
 
     async columns() {

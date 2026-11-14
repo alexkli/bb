@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -73,6 +75,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { EmptyState } from "./components/empty-state.js";
 
 type IssueDetail = PluginRpcResult<
@@ -554,8 +562,7 @@ const COL: Record<ColumnId | "actions", string> = {
   title:
     "order-first flex min-w-0 basis-full flex-col items-start gap-1.5 @[48rem]:order-none @[48rem]:flex-1 @[48rem]:basis-auto @[48rem]:flex-row @[48rem]:items-center @[48rem]:gap-2",
   labels: "hidden min-w-0 shrink-0 @[48rem]:flex @[48rem]:w-44",
-  author:
-    "hidden min-w-0 shrink-0 items-center gap-1.5 @[48rem]:flex @[48rem]:w-28",
+  author: "hidden shrink-0 @[48rem]:flex @[48rem]:w-16",
   assignee: "shrink-0 @[48rem]:w-20",
   status: "shrink-0 @[48rem]:w-24",
   review: "shrink-0 @[48rem]:w-24",
@@ -679,17 +686,69 @@ function LabelsCell({ labels }: { labels: string[] }) {
   );
 }
 
+const PeopleContext = createContext<Record<string, string>>({});
+
+function usePeople(): Record<string, string> {
+  const rpc = useRpc<typeof githubRpcContract>();
+  const [names, setNames] = useState<Record<string, string>>({});
+  const refetch = useCallback(() => {
+    rpc.call("people").then(
+      (result) => setNames(result.names),
+      () => {},
+    );
+  }, [rpc]);
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+  useRealtime("data-changed", refetch);
+  return names;
+}
+
+function PersonAvatar({
+  author,
+  className,
+}: {
+  author: string;
+  className?: string;
+}) {
+  const names = useContext(PeopleContext);
+  const isApp = author.startsWith("app/");
+  const login = isApp ? author.slice(4) : author;
+  const name = names[login];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex shrink-0">
+          <img
+            src={`https://github.com/${encodeURIComponent(login)}.png?size=64`}
+            alt={login}
+            loading="lazy"
+            className={`size-5 shrink-0 rounded-full bg-muted ${className ?? ""}`}
+          />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {name !== undefined ? (
+          <>
+            {name} <span className="opacity-70">@{login}</span>
+          </>
+        ) : (
+          `@${login}`
+        )}
+        {isApp ? <span className="opacity-70"> (app)</span> : null}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function AssigneeCell({ assignees }: { assignees: string[] }) {
   if (assignees.length === 0) {
     return <span className="text-muted-foreground/50">—</span>;
   }
   return (
-    <span
-      className="flex items-center -space-x-1.5"
-      title={assignees.join(", ")}
-    >
+    <span className="flex items-center -space-x-1.5">
       {assignees.slice(0, 3).map((login) => (
-        <Avatar key={login} login={login} className="ring-1 ring-card" />
+        <PersonAvatar key={login} author={login} className="ring-1 ring-card" />
       ))}
       {assignees.length > 3 ? (
         <span className="pl-2.5 text-xs text-muted-foreground">
@@ -881,12 +940,8 @@ function ItemCell({
       );
     case "author":
       return (
-        <span
-          className={`${COL.author} text-xs text-muted-foreground`}
-          title={item.author}
-        >
-          <Avatar login={item.author.replace(/^app\//, "")} size="size-4" />
-          <span className="truncate">{authorLabel(item.author)}</span>
+        <span className={COL.author}>
+          <PersonAvatar author={item.author} />
         </span>
       );
     case "review":
@@ -987,10 +1042,6 @@ function EmptyCell() {
   return <span className="text-xs text-muted-foreground/50">—</span>;
 }
 
-function authorLabel(author: string): string {
-  return author.startsWith("app/") ? `${author.slice(4)} (app)` : author;
-}
-
 function ItemRow({
   item,
   columns,
@@ -1049,7 +1100,7 @@ const SKELETON_CELL: Record<ColumnId, string> = {
   repo: "h-3 w-20",
   title: "h-3 w-4/5",
   labels: "h-3 w-24",
-  author: "h-3 w-20",
+  author: "size-5 rounded-full",
   assignee: "size-5 rounded-full @[48rem]:h-3 @[48rem]:w-16",
   status: "h-3 w-16",
   review: "h-3 w-16",
@@ -2528,19 +2579,24 @@ function GithubPanel({ subPath }: PluginNavPanelProps) {
       window.localStorage.setItem(QUERY_KEY, next);
     } catch {}
   }, []);
+  const people = usePeople();
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
-      <div className="mx-auto w-full max-w-5xl space-y-4">
-        <GithubPanelBody
-          route={route}
-          navigate={navigate}
-          status={status}
-          query={query}
-          setQuery={setQuery}
-        />
-      </div>
-    </div>
+    <PeopleContext.Provider value={people}>
+      <TooltipProvider delayDuration={200}>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+          <div className="mx-auto w-full max-w-5xl space-y-4">
+            <GithubPanelBody
+              route={route}
+              navigate={navigate}
+              status={status}
+              query={query}
+              setQuery={setQuery}
+            />
+          </div>
+        </div>
+      </TooltipProvider>
+    </PeopleContext.Provider>
   );
 }
 

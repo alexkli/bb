@@ -49,8 +49,6 @@ export const DEFAULT_COLUMNS: readonly ColumnId[] = [
   "id",
   "repo",
   "title",
-  "labels",
-  "author",
   "assignee",
   "status",
   "updated",
