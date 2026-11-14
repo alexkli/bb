@@ -56,8 +56,18 @@ export interface ListSort {
 
 export const DEFAULT_SORT: ListSort = { column: "updated", direction: "desc" };
 
+const DESCENDING_FIRST: ReadonlySet<ColumnId> = new Set([
+  "id",
+  "updated",
+  "created",
+  "comments",
+  "size",
+  "agent",
+  "draft",
+]);
+
 export function defaultSortDirection(column: ColumnId): SortDirection {
-  return column === "updated" || column === "id" ? "desc" : "asc";
+  return DESCENDING_FIRST.has(column) ? "desc" : "asc";
 }
 
 function parseSort(value: string): ListSort | null {
@@ -183,7 +193,23 @@ export function matchesQuery(
   return true;
 }
 
-export function sortItems(items: readonly Item[], sort: ListSort): Item[] {
+const REVIEW_RANK: Record<string, number> = {
+  CHANGES_REQUESTED: 0,
+  REVIEW_REQUIRED: 1,
+  APPROVED: 2,
+};
+
+const CHECKS_RANK: Record<string, number> = {
+  failure: 0,
+  pending: 1,
+  success: 2,
+};
+
+export function sortItems(
+  items: readonly Item[],
+  sort: ListSort,
+  agentCount: (item: Item) => number = () => 0,
+): Item[] {
   const text = (a: string, b: string) =>
     a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
   const compare = (a: Item, b: Item): number => {
@@ -194,31 +220,76 @@ export function sortItems(items: readonly Item[], sort: ListSort): Item[] {
         return text(a.repo, b.repo) || a.number - b.number;
       case "title":
         return text(a.title, b.title);
-      case "assignee":
-        return text(a.assignees[0] ?? "", b.assignees[0] ?? "");
       case "labels":
         return text(a.labels[0] ?? "", b.labels[0] ?? "");
+      case "author":
+        return text(a.author, b.author);
+      case "assignee":
+        return text(a.assignees[0] ?? "", b.assignees[0] ?? "");
       case "status":
         return text(a.state, b.state);
+      case "review":
+        return (
+          (REVIEW_RANK[a.pr?.review ?? ""] ?? 0) -
+          (REVIEW_RANK[b.pr?.review ?? ""] ?? 0)
+        );
+      case "checks":
+        return (
+          (CHECKS_RANK[a.pr?.checks ?? ""] ?? 0) -
+          (CHECKS_RANK[b.pr?.checks ?? ""] ?? 0)
+        );
+      case "draft":
+        return Number(a.pr?.draft ?? false) - Number(b.pr?.draft ?? false);
+      case "size":
+        return itemSize(a) - itemSize(b);
+      case "agent":
+        return agentCount(a) - agentCount(b);
+      case "comments":
+        return a.comments - b.comments;
+      case "milestone":
+        return text(a.milestone ?? "", b.milestone ?? "");
+      case "created":
+        return a.createdAt.localeCompare(b.createdAt);
       case "updated":
         return a.updatedAt.localeCompare(b.updatedAt);
     }
   };
+  const isEmpty = emptyCheck(sort.column, agentCount);
   const sign = sort.direction === "asc" ? 1 : -1;
-  const emptyList =
-    sort.column === "assignee"
-      ? (item: Item) => item.assignees.length === 0
-      : sort.column === "labels"
-        ? (item: Item) => item.labels.length === 0
-        : null;
   return [...items].sort((a, b) => {
-    if (emptyList !== null) {
-      const aEmpty = emptyList(a);
-      const bEmpty = emptyList(b);
+    if (isEmpty !== null) {
+      const aEmpty = isEmpty(a);
+      const bEmpty = isEmpty(b);
       if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
     }
     return sign * compare(a, b);
   });
+}
+
+function itemSize(item: Item): number {
+  return item.pr === null ? 0 : item.pr.additions + item.pr.deletions;
+}
+
+function emptyCheck(
+  column: ColumnId,
+  agentCount: (item: Item) => number,
+): ((item: Item) => boolean) | null {
+  switch (column) {
+    case "labels":
+      return (item) => item.labels.length === 0;
+    case "assignee":
+      return (item) => item.assignees.length === 0;
+    case "milestone":
+      return (item) => item.milestone === null;
+    case "review":
+      return (item) => item.pr?.review == null;
+    case "checks":
+      return (item) => item.pr?.checks == null;
+    case "agent":
+      return (item) => agentCount(item) === 0;
+    default:
+      return null;
+  }
 }
 
 export function withSort(query: string, sort: ListSort | null): string {

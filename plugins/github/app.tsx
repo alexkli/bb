@@ -40,7 +40,10 @@ import {
 import {
   COLUMN_IDS,
   COLUMN_LABELS,
+  columnsForKind,
+  DEFAULT_COLUMNS,
   moveColumn,
+  PR_ONLY_COLUMNS,
   repoLabels,
   toggleColumn,
   type ColumnId,
@@ -149,7 +152,7 @@ function useColumns(): {
   const refetch = useCallback(() => {
     rpc.call("columns").then(
       (result) => setColumnsState(result.columns),
-      () => setColumnsState([...COLUMN_IDS]),
+      () => setColumnsState([...DEFAULT_COLUMNS]),
     );
   }, [rpc]);
   useEffect(() => {
@@ -551,8 +554,18 @@ const COL: Record<ColumnId | "actions", string> = {
   title:
     "order-first flex min-w-0 basis-full flex-col items-start gap-1.5 @[48rem]:order-none @[48rem]:flex-1 @[48rem]:basis-auto @[48rem]:flex-row @[48rem]:items-center @[48rem]:gap-2",
   labels: "hidden min-w-0 shrink-0 @[48rem]:flex @[48rem]:w-44",
+  author:
+    "hidden min-w-0 shrink-0 items-center gap-1.5 @[48rem]:flex @[48rem]:w-28",
   assignee: "shrink-0 @[48rem]:w-20",
   status: "shrink-0 @[48rem]:w-24",
+  review: "shrink-0 @[48rem]:w-24",
+  checks: "shrink-0 items-center gap-1.5 @[48rem]:w-20",
+  draft: "hidden shrink-0 @[48rem]:block @[48rem]:w-12",
+  size: "hidden shrink-0 whitespace-nowrap text-right @[48rem]:block @[48rem]:w-24",
+  agent: "shrink-0 @[48rem]:w-24",
+  comments: "hidden w-10 shrink-0 text-right @[48rem]:block",
+  milestone: "hidden min-w-0 shrink-0 truncate @[48rem]:block @[48rem]:w-28",
+  created: "hidden w-14 shrink-0 text-right @[48rem]:block",
   updated: "hidden w-14 shrink-0 text-right @[48rem]:block",
   actions:
     "ml-auto flex shrink-0 items-center justify-end gap-1 @[48rem]:ml-0 @[48rem]:w-24",
@@ -579,20 +592,33 @@ function ColumnsMenu({
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>Columns</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {COLUMN_IDS.map((column) => (
-          <DropdownMenuCheckboxItem
-            key={column}
-            checked={columns?.includes(column) ?? false}
-            disabled={column === "title" || columns === null}
-            onCheckedChange={(checked) => {
-              if (columns === null) return;
-              onChange(toggleColumn(columns, column, checked === true));
-            }}
-            onSelect={(event) => event.preventDefault()}
-          >
-            {COLUMN_LABELS[column]}
-          </DropdownMenuCheckboxItem>
-        ))}
+        {[
+          ...COLUMN_IDS.filter((column) => !PR_ONLY_COLUMNS.has(column)),
+          null,
+          ...COLUMN_IDS.filter((column) => PR_ONLY_COLUMNS.has(column)),
+        ].map((column) =>
+          column === null ? (
+            <DropdownMenuLabel
+              key="pr-only"
+              className="text-xs font-normal text-muted-foreground"
+            >
+              Pull requests only
+            </DropdownMenuLabel>
+          ) : (
+            <DropdownMenuCheckboxItem
+              key={column}
+              checked={columns?.includes(column) ?? false}
+              disabled={column === "title" || columns === null}
+              onCheckedChange={(checked) => {
+                if (columns === null) return;
+                onChange(toggleColumn(columns, column, checked === true));
+              }}
+              onSelect={(event) => event.preventDefault()}
+            >
+              {COLUMN_LABELS[column]}
+            </DropdownMenuCheckboxItem>
+          ),
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -800,11 +826,13 @@ function ItemCell({
   item,
   links,
   repoLabel,
+  agentInTitle,
 }: {
   column: ColumnId;
   item: Item;
   links: ThreadLink[] | undefined;
   repoLabel: string;
+  agentInTitle: boolean;
 }) {
   switch (column) {
     case "id":
@@ -828,7 +856,7 @@ function ItemCell({
           <span className="min-w-0 flex-1 line-clamp-3 text-sm font-medium leading-snug text-foreground @[48rem]:line-clamp-1 @[48rem]:leading-normal">
             {item.title}
           </span>
-          <ThreadPills links={links} />
+          {agentInTitle ? <ThreadPills links={links} /> : null}
         </span>
       );
     case "labels":
@@ -851,6 +879,101 @@ function ItemCell({
           <StatusCell item={item} />
         </span>
       );
+    case "author":
+      return (
+        <span
+          className={`${COL.author} text-xs text-muted-foreground`}
+          title={item.author}
+        >
+          <Avatar login={item.author.replace(/^app\//, "")} size="size-4" />
+          <span className="truncate">{authorLabel(item.author)}</span>
+        </span>
+      );
+    case "review":
+      return (
+        <span className={COL.review}>
+          {item.pr?.review ? (
+            <ReviewDecisionBadge decision={item.pr.review} />
+          ) : (
+            <EmptyCell />
+          )}
+        </span>
+      );
+    case "checks":
+      return (
+        <span
+          className={`${COL.checks} ${item.pr?.checks ? "flex" : "hidden @[48rem]:flex"} text-xs text-muted-foreground`}
+        >
+          {item.pr?.checks ? (
+            <>
+              <span
+                className={`size-2 shrink-0 rounded-full ${checkDotClass(item.pr.checks)}`}
+              />
+              {item.pr.checks}
+            </>
+          ) : (
+            <EmptyCell />
+          )}
+        </span>
+      );
+    case "draft":
+      return (
+        <span className={COL.draft}>
+          {item.pr?.draft ? (
+            <Badge variant="outline" className="font-normal">
+              draft
+            </Badge>
+          ) : (
+            <EmptyCell />
+          )}
+        </span>
+      );
+    case "size":
+      return (
+        <span className={`${COL.size} font-mono text-xs`}>
+          {item.pr ? (
+            <>
+              <span className="text-green-600 dark:text-green-400">
+                +{item.pr.additions}
+              </span>{" "}
+              <span className="text-red-600 dark:text-red-400">
+                −{item.pr.deletions}
+              </span>
+            </>
+          ) : (
+            <EmptyCell />
+          )}
+        </span>
+      );
+    case "agent":
+      return (
+        <span
+          className={`${COL.agent} ${links?.length ? "flex" : "hidden @[48rem]:flex"}`}
+        >
+          {links?.length ? <ThreadPills links={links} /> : <EmptyCell />}
+        </span>
+      );
+    case "comments":
+      return (
+        <span className={`${COL.comments} text-xs text-muted-foreground`}>
+          {item.comments > 0 ? `💬 ${item.comments}` : <EmptyCell />}
+        </span>
+      );
+    case "milestone":
+      return (
+        <span
+          className={`${COL.milestone} text-xs text-muted-foreground`}
+          title={item.milestone ?? undefined}
+        >
+          {item.milestone ?? <EmptyCell />}
+        </span>
+      );
+    case "created":
+      return (
+        <span className={`${COL.created} text-xs text-muted-foreground`}>
+          {relativeTime(item.createdAt)}
+        </span>
+      );
     case "updated":
       return (
         <span className={`${COL.updated} text-xs text-muted-foreground`}>
@@ -858,6 +981,14 @@ function ItemCell({
         </span>
       );
   }
+}
+
+function EmptyCell() {
+  return <span className="text-xs text-muted-foreground/50">—</span>;
+}
+
+function authorLabel(author: string): string {
+  return author.startsWith("app/") ? `${author.slice(4)} (app)` : author;
 }
 
 function ItemRow({
@@ -887,6 +1018,7 @@ function ItemRow({
           item={item}
           links={links}
           repoLabel={repoLabel}
+          agentInTitle={!columns.includes("agent")}
         />
       ))}
       <span className={COL.actions}>
@@ -917,8 +1049,17 @@ const SKELETON_CELL: Record<ColumnId, string> = {
   repo: "h-3 w-20",
   title: "h-3 w-4/5",
   labels: "h-3 w-24",
+  author: "h-3 w-20",
   assignee: "size-5 rounded-full @[48rem]:h-3 @[48rem]:w-16",
   status: "h-3 w-16",
+  review: "h-3 w-16",
+  checks: "h-3 w-14",
+  draft: "h-3 w-8",
+  size: "ml-auto h-3 w-16",
+  agent: "h-3 w-14",
+  comments: "ml-auto h-3 w-6",
+  milestone: "h-3 w-20",
+  created: "ml-auto h-3 w-12",
   updated: "ml-auto h-3 w-12",
 };
 
@@ -967,6 +1108,7 @@ function ItemsTable({
   repos,
   error,
   hasFilter,
+  links,
   sort,
   onSort,
   onColumnsChange,
@@ -978,17 +1120,17 @@ function ItemsTable({
   repos: RepoInfo[];
   error: string | null;
   hasFilter: boolean;
+  links: LinksMap;
   sort: ListSort;
   onSort: (column: ColumnId) => void;
   onColumnsChange: (next: ColumnId[]) => void;
   onOpenItem: (repo: string, number: number) => void;
 }) {
-  const links = useLinks();
   const labels = useMemo(
     () => repoLabels(repos.map((info) => info.repo)),
     [repos],
   );
-  const shown = columns ?? [...COLUMN_IDS];
+  const shown = columnsForKind(columns ?? DEFAULT_COLUMNS, kind);
 
   let body: React.ReactNode;
   if (error !== null) {
@@ -1012,7 +1154,7 @@ function ItemsTable({
           <ItemRow
             key={`${item.repo}#${item.number}`}
             item={item}
-            columns={columns}
+            columns={shown}
             links={links[`${kind}:${item.repo}#${item.number}`]}
             repoLabel={labels.get(item.repo) ?? item.repo}
             onOpen={() => onOpenItem(item.repo, item.number)}
@@ -1028,7 +1170,12 @@ function ItemsTable({
         columns={shown}
         sort={sort}
         onSort={onSort}
-        onReorder={columns === null ? null : onColumnsChange}
+        onMove={
+          columns === null
+            ? null
+            : (column, target, after) =>
+                onColumnsChange(moveColumn(columns, column, target, after))
+        }
       />
       {body}
     </div>
@@ -1058,12 +1205,12 @@ function TableHeader({
   columns,
   sort,
   onSort,
-  onReorder,
+  onMove,
 }: {
   columns: ColumnId[];
   sort: ListSort;
   onSort: (column: ColumnId) => void;
-  onReorder: ((next: ColumnId[]) => void) | null;
+  onMove: ((column: ColumnId, target: ColumnId, after: boolean) => void) | null;
 }) {
   const [dragging, setDragging] = useState<ColumnId | null>(null);
   const [drop, setDrop] = useState<{
@@ -1083,10 +1230,10 @@ function TableHeader({
         return (
           <span
             key={column}
-            className={`relative ${column === "title" ? "min-w-0 flex-1" : COL[column]} ${dragging === column ? "opacity-50" : ""} ${onReorder === null ? "" : "cursor-grab"}`}
-            draggable={onReorder !== null}
+            className={`relative ${column === "title" ? "min-w-0 flex-1" : COL[column]} ${dragging === column ? "opacity-50" : ""} ${onMove === null ? "" : "cursor-grab"}`}
+            draggable={onMove !== null}
             title={
-              onReorder === null ? undefined : "Click to sort, drag to reorder"
+              onMove === null ? undefined : "Click to sort, drag to reorder"
             }
             onDragStart={(event) => {
               event.dataTransfer.effectAllowed = "move";
@@ -1108,10 +1255,8 @@ function TableHeader({
             }}
             onDrop={(event) => {
               event.preventDefault();
-              if (dragging !== null && drop !== null && onReorder !== null) {
-                onReorder(
-                  moveColumn(columns, dragging, drop.target, drop.after),
-                );
+              if (dragging !== null && drop !== null && onMove !== null) {
+                onMove(dragging, drop.target, drop.after);
               }
               reset();
             }}
@@ -2419,6 +2564,7 @@ function ListView({
   const { items, error } = useItems(kind);
   const viewer = useViewer();
   const parsed = useMemo(() => parseQuery(query), [query]);
+  const links = useLinks();
   const sort: ListSort = parsed.sort ?? DEFAULT_SORT;
   const filtered = useMemo(
     () =>
@@ -2427,8 +2573,9 @@ function ListView({
         : sortItems(
             items.filter((item) => matchesQuery(item, parsed, viewer)),
             parsed.sort ?? DEFAULT_SORT,
+            (item) => links[`${kind}:${item.repo}#${item.number}`]?.length ?? 0,
           ),
-    [items, parsed, viewer],
+    [items, parsed, viewer, links, kind],
   );
   return (
     <>
@@ -2446,6 +2593,7 @@ function ListView({
         repos={repos}
         error={error}
         hasFilter={withSort(query, null).trim().length > 0}
+        links={links}
         sort={sort}
         onSort={(column) => setQuery(withSort(query, nextSort(sort, column)))}
         onColumnsChange={onColumnsChange}

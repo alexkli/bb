@@ -49,20 +49,39 @@ bb plugin reload github
 
 ## List columns
 
-The issue and pull request lists show ID, Repo, Title, Labels, Assignee, Status, and
-Updated by default. Repo shows the repository name, or `owner/repo` when two
-tracked owners share a name; hover it for the full name. Pick columns from the
-**Columns** menu next to the tabs, or set the ordered `columns` setting:
+The issue and pull request lists show ID, Repo, Title, Labels, Author,
+Assignee, Status, and Updated by default. Repo shows the repository name, or
+`owner/repo` when two tracked owners share a name; hover it for the full name.
+Pick columns from the **Columns** menu next to the tabs, or set the ordered
+`columns` setting:
 
 ```
 bb plugin config github set columns "repo, id, title, status"
 bb plugin config github unset columns
 ```
 
-Available columns: `id`, `repo`, `title`, `labels`, `assignee`, `status`, `updated`.
-Title is always shown; unknown names are rejected. Changes apply to open
-panels immediately. Drag a column header to reorder the columns; the new order
-is saved to the same setting.
+| Column      | Shows                                                            |
+| ----------- | ---------------------------------------------------------------- |
+| `id`        | Issue or PR number                                               |
+| `repo`      | Repository                                                       |
+| `title`     | Title; always shown                                              |
+| `labels`    | Label chips that fit, then a `+N` count; hover for all           |
+| `author`    | Who opened it; GitHub Apps are marked `(app)`                    |
+| `assignee`  | Assignee avatars                                                 |
+| `status`    | Open/closed/merged state                                         |
+| `review`    | PRs only: approved, changes requested, or review required        |
+| `checks`    | PRs only: CI rollup of the head commit (success/failure/pending) |
+| `draft`     | PRs only: draft marker                                           |
+| `size`      | PRs only: lines added and removed                                |
+| `agent`     | BB agent threads working on it (otherwise shown after the title) |
+| `comments`  | Comment count                                                    |
+| `milestone` | Milestone title                                                  |
+| `created`   | When it was opened                                               |
+| `updated`   | When it last changed                                             |
+
+PR-only columns are skipped on the Issues tab. Unknown names are rejected.
+Changes apply to open panels immediately. Drag a column header to reorder the
+columns; the new order is saved to the same setting.
 
 Click a column header to sort by it, and click again to reverse. The sort is a
 filter qualifier, `sort:<column>-<asc|desc>` (for example `sort:repo-asc`), so

@@ -38,7 +38,15 @@ function node(number: number, state = "OPEN") {
     assignees: { nodes: [{ login: "alice" }] },
     body: "Body\ntext",
     url: `https://github.com/acme/one/issues/${number}`,
+    createdAt: "2026-09-09T00:00:00Z",
     updatedAt: "2026-09-10T00:00:00Z",
+    comments: { totalCount: 0 },
+    milestone: null,
+    isDraft: false,
+    reviewDecision: null,
+    additions: 1,
+    deletions: 0,
+    commits: { nodes: [] },
   };
 }
 function repository() {
@@ -108,7 +116,11 @@ it("maps all four lists into SQLite and preserves closed/merged filtering", asyn
         assignees: ["alice"],
         body: "Body\ntext",
         url: "https://github.com/acme/one/issues/1",
+        createdAt: "2026-09-09T00:00:00Z",
         updatedAt: "2026-09-10T00:00:00Z",
+        comments: 0,
+        milestone: null,
+        pr: null,
       },
     ],
   });

@@ -34,7 +34,10 @@ beforeEach(() => {
       assignees: { nodes: [{ login: "octocat" }] },
       url: "https://github.com/acme/widgets/issues/7",
       body: "Keep the cache synchronized.",
+      createdAt: "2026-08-18T12:00:00Z",
       updatedAt: "2026-08-19T12:00:00Z",
+      comments: { totalCount: 2 },
+      milestone: { title: "v1" },
     },
   ];
   const openPull = [
@@ -47,7 +50,17 @@ beforeEach(() => {
       assignees: { nodes: [] },
       url: "https://github.com/acme/widgets/pull/42",
       body: "Normalize every GitHub shape.",
+      createdAt: "2026-08-18T13:00:00Z",
       updatedAt: "2026-08-19T13:00:00Z",
+      comments: { totalCount: 0 },
+      milestone: null,
+      isDraft: true,
+      reviewDecision: "REVIEW_REQUIRED",
+      additions: 12,
+      deletions: 3,
+      commits: {
+        nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }],
+      },
     },
   ];
   const lists = JSON.stringify({
@@ -223,6 +236,7 @@ describe("github plugin RPC behavior", () => {
         "repo",
         "title",
         "labels",
+        "author",
         "assignee",
         "status",
         "updated",
@@ -242,7 +256,7 @@ describe("github plugin RPC behavior", () => {
     ).toHaveLength(1);
 
     await expect(
-      harness.callRpc("setColumns", { columns: ["milestone"] }),
+      harness.callRpc("setColumns", { columns: ["priority"] }),
     ).rejects.toThrow();
   });
 
@@ -384,6 +398,30 @@ describe("github plugin RPC behavior", () => {
     await expect(harness.callRpc("refresh")).resolves.toEqual({
       repos: 1,
       items: 2,
+    });
+    await expect(
+      harness.callRpc("listItems", { kind: "pr" }),
+    ).resolves.toMatchObject({
+      items: [
+        {
+          number: 42,
+          createdAt: "2026-08-18T13:00:00Z",
+          comments: 0,
+          milestone: null,
+          pr: {
+            draft: true,
+            review: "REVIEW_REQUIRED",
+            checks: "failure",
+            additions: 12,
+            deletions: 3,
+          },
+        },
+      ],
+    });
+    await expect(
+      harness.callRpc("listItems", { kind: "issue" }),
+    ).resolves.toMatchObject({
+      items: [{ number: 7, comments: 2, milestone: "v1", pr: null }],
     });
     await expect(
       harness.callRpc("listItems", {

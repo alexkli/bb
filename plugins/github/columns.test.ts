@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  columnsForKind,
   DEFAULT_COLUMNS,
   moveColumn,
   parseColumns,
@@ -29,7 +30,7 @@ describe("list columns setting", () => {
   });
 
   it("reports unknown entries", () => {
-    expect(parseColumns("id, milestone, title").ignored).toEqual(["milestone"]);
+    expect(parseColumns("id, priority, title").ignored).toEqual(["priority"]);
   });
 });
 
@@ -82,5 +83,13 @@ describe("moving columns", () => {
       "status",
     ]);
     expect(moveColumn(columns, "id", "updated", true)).toEqual([...columns]);
+  });
+});
+
+describe("columns per tab", () => {
+  it("drops pull-request-only columns from the issues list", () => {
+    const columns = ["id", "review", "title", "checks", "author"] as const;
+    expect(columnsForKind(columns, "issue")).toEqual(["id", "title", "author"]);
+    expect(columnsForKind(columns, "pr")).toEqual([...columns]);
   });
 });

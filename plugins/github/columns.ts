@@ -3,8 +3,17 @@ export const COLUMN_IDS = [
   "repo",
   "title",
   "labels",
+  "author",
   "assignee",
   "status",
+  "review",
+  "checks",
+  "draft",
+  "size",
+  "agent",
+  "comments",
+  "milestone",
+  "created",
   "updated",
 ] as const;
 
@@ -15,14 +24,48 @@ export const COLUMN_LABELS: Record<ColumnId, string> = {
   repo: "Repo",
   title: "Title",
   labels: "Labels",
+  author: "Author",
   assignee: "Assignee",
   status: "Status",
+  review: "Review",
+  checks: "Checks",
+  draft: "Draft",
+  size: "Size",
+  agent: "Agent",
+  comments: "Comments",
+  milestone: "Milestone",
+  created: "Created",
   updated: "Updated",
 };
 
-export const DEFAULT_COLUMNS: readonly ColumnId[] = COLUMN_IDS;
+export const PR_ONLY_COLUMNS: ReadonlySet<ColumnId> = new Set([
+  "review",
+  "checks",
+  "draft",
+  "size",
+]);
+
+export const DEFAULT_COLUMNS: readonly ColumnId[] = [
+  "id",
+  "repo",
+  "title",
+  "labels",
+  "author",
+  "assignee",
+  "status",
+  "updated",
+];
 
 export const DEFAULT_COLUMNS_SETTING = DEFAULT_COLUMNS.join(", ");
+
+export function columnsForKind(
+  columns: readonly ColumnId[],
+  kind: "issue" | "pr",
+): ColumnId[] {
+  return kind === "pr"
+    ? [...columns]
+    : columns.filter((column) => !PR_ONLY_COLUMNS.has(column));
+}
 
 function isColumnId(value: string): value is ColumnId {
   return (COLUMN_IDS as readonly string[]).includes(value);
@@ -58,9 +101,9 @@ export function toggleColumn(
   if (column === "title") return [...columns];
   if (!visible) return columns.filter((entry) => entry !== column);
   if (columns.includes(column)) return [...columns];
-  const rank = DEFAULT_COLUMNS.indexOf(column);
+  const rank = COLUMN_IDS.indexOf(column);
   const insertAt = columns.findIndex(
-    (entry) => DEFAULT_COLUMNS.indexOf(entry) > rank,
+    (entry) => COLUMN_IDS.indexOf(entry) > rank,
   );
   const next = [...columns];
   next.splice(insertAt === -1 ? next.length : insertAt, 0, column);

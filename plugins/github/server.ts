@@ -53,7 +53,22 @@ const itemSchema = z
     assignees: z.array(z.string()),
     url: z.string(),
     body: z.string(),
+    createdAt: z.string(),
     updatedAt: z.string(),
+    comments: z.number().int().nonnegative(),
+    milestone: z.string().nullable(),
+    pr: z
+      .object({
+        draft: z.boolean(),
+        review: z
+          .enum(["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"])
+          .nullable(),
+        checks: z.enum(["success", "failure", "pending"]).nullable(),
+        additions: z.number().int().nonnegative(),
+        deletions: z.number().int().nonnegative(),
+      })
+      .strict()
+      .nullable(),
   })
   .strict();
 const syncResultSchema = z
@@ -452,7 +467,39 @@ const listNodeSchema = z.object({
   }),
   url: z.string(),
   body: z.string(),
+  createdAt: z.string(),
   updatedAt: z.string(),
+  comments: z.object({ totalCount: z.number().int().nonnegative() }),
+  milestone: z.object({ title: z.string() }).nullable(),
+});
+const pullNodeSchema = listNodeSchema.extend({
+  isDraft: z.boolean(),
+  reviewDecision: z
+    .enum(["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"])
+    .nullable(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  commits: z.object({
+    nodes: z
+      .array(
+        z.object({
+          commit: z.object({
+            statusCheckRollup: z
+              .object({
+                state: z.enum([
+                  "ERROR",
+                  "EXPECTED",
+                  "FAILURE",
+                  "PENDING",
+                  "SUCCESS",
+                ]),
+              })
+              .nullable(),
+          }),
+        }),
+      )
+      .max(1),
+  }),
 });
 const repositoryListsSchema = z.object({
   data: z.object({
@@ -470,12 +517,12 @@ const repositoryListsSchema = z.object({
       }),
       openPrs: z.object({
         nodes: z
-          .array(listNodeSchema.extend({ state: z.literal("OPEN") }))
+          .array(pullNodeSchema.extend({ state: z.literal("OPEN") }))
           .max(PR_PAGE),
       }),
       closedPrs: z.object({
         nodes: z
-          .array(listNodeSchema.extend({ state: z.enum(["CLOSED", "MERGED"]) }))
+          .array(pullNodeSchema.extend({ state: z.enum(["CLOSED", "MERGED"]) }))
           .max(CLOSED_PR_PAGE),
       }),
     }),
@@ -486,7 +533,13 @@ const listFields = `
   number title state author { login ... on User { id } }
   labels(first: 100) { nodes { name } }
   assignees(first: 100) { nodes { login } }
-  url body updatedAt
+  url body createdAt updatedAt
+  comments { totalCount }
+  milestone { title }
+`;
+const pullFields = `${listFields}
+  isDraft reviewDecision additions deletions
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 `;
 const repositoryListsQuery = `query RepositoryLists($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -498,13 +551,22 @@ const repositoryListsQuery = `query RepositoryLists($owner: String!, $name: Stri
       nodes { ${listFields} }
     }
     openPrs: pullRequests(first: ${PR_PAGE}, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) {
-      nodes { ${listFields} }
+      nodes { ${pullFields} }
     }
     closedPrs: pullRequests(first: ${CLOSED_PR_PAGE}, states: [CLOSED, MERGED], orderBy: {field: CREATED_AT, direction: DESC}) {
-      nodes { ${listFields} }
+      nodes { ${pullFields} }
     }
   }
 }`;
+
+function checksState(
+  state: "ERROR" | "EXPECTED" | "FAILURE" | "PENDING" | "SUCCESS" | undefined,
+): "success" | "failure" | "pending" | null {
+  if (state === "SUCCESS") return "success";
+  if (state === "FAILURE" || state === "ERROR") return "failure";
+  if (state === "PENDING" || state === "EXPECTED") return "pending";
+  return null;
+}
 
 async function fetchRepoItems(
   gh: GhRunner,
@@ -527,7 +589,9 @@ async function fetchRepoItems(
     data: { repository },
   } = repositoryListsSchema.parse(JSON.parse(raw));
   const toItems = (
-    nodes: z.infer<typeof listNodeSchema>[],
+    nodes: Array<
+      z.infer<typeof listNodeSchema> & Partial<z.infer<typeof pullNodeSchema>>
+    >,
     kind: "issue" | "pr",
   ): CachedItem[] =>
     nodes.map((entry) => ({
@@ -543,7 +607,22 @@ async function fetchRepoItems(
       assignees: entry.assignees.nodes.map((user) => user.login),
       url: entry.url,
       body: entry.body,
+      createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
+      comments: entry.comments.totalCount,
+      milestone: entry.milestone?.title ?? null,
+      pr:
+        kind === "pr"
+          ? {
+              draft: entry.isDraft ?? false,
+              review: entry.reviewDecision ?? null,
+              checks: checksState(
+                entry.commits?.nodes[0]?.commit.statusCheckRollup?.state,
+              ),
+              additions: entry.additions ?? 0,
+              deletions: entry.deletions ?? 0,
+            }
+          : null,
     }));
   return [
     ...(repository.hasIssuesEnabled
@@ -747,7 +826,28 @@ export default async function plugin(bb: BbPluginApi) {
        PRIMARY KEY (repo, kind, number)
      )`,
     `ALTER TABLE items ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE items ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE items ADD COLUMN comments INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE items ADD COLUMN milestone TEXT`,
+    `ALTER TABLE items ADD COLUMN pr TEXT`,
   ]);
+
+  const cachedPrSchema = itemSchema.shape.pr;
+
+  function parsePr(raw: unknown, kind: "issue" | "pr"): CachedItem["pr"] {
+    if (kind !== "pr") return null;
+    try {
+      const parsed = cachedPrSchema.safeParse(JSON.parse(String(raw)));
+      if (parsed.success && parsed.data !== null) return parsed.data;
+    } catch {}
+    return {
+      draft: false,
+      review: null,
+      checks: null,
+      additions: 0,
+      deletions: 0,
+    };
+  }
 
   function parseStringArray(raw: unknown): string[] {
     try {
@@ -758,10 +858,12 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   function rowToItem(row: Record<string, unknown>): CachedItem {
+    const kind = row.kind === "pr" ? "pr" : "issue";
+    const updatedAt = String(row.updated_at);
     return {
       repo: String(row.repo),
       number: Number(row.number),
-      kind: row.kind === "pr" ? "pr" : "issue",
+      kind,
       title: String(row.title),
       state: String(row.state),
       author: String(row.author),
@@ -769,7 +871,11 @@ export default async function plugin(bb: BbPluginApi) {
       assignees: parseStringArray(row.assignees),
       url: String(row.url),
       body: String(row.body),
-      updatedAt: String(row.updated_at),
+      createdAt: String(row.created_at ?? "") || updatedAt,
+      updatedAt,
+      comments: Number(row.comments ?? 0),
+      milestone: typeof row.milestone === "string" ? row.milestone : null,
+      pr: parsePr(row.pr, kind),
     };
   }
 
@@ -827,8 +933,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   function replaceRepoRows(repo: string, items: CachedItem[]): void {
     const insert = db.prepare(
-      `INSERT INTO items (repo, number, kind, title, state, author, labels, assignees, url, body, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO items (repo, number, kind, title, state, author, labels, assignees, url, body, created_at, updated_at, comments, milestone, pr)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     db.transaction(() => {
       db.prepare("DELETE FROM items WHERE repo = ?").run(repo);
@@ -844,7 +950,11 @@ export default async function plugin(bb: BbPluginApi) {
           JSON.stringify(item.assignees),
           item.url,
           item.body,
+          item.createdAt,
           item.updatedAt,
+          item.comments,
+          item.milestone,
+          item.pr === null ? null : JSON.stringify(item.pr),
         );
       }
     })();
