@@ -218,7 +218,15 @@ describe("github plugin RPC behavior", () => {
     const { harness } = await loadPlugin();
 
     await expect(harness.callRpc("columns")).resolves.toEqual({
-      columns: ["id", "repo", "title", "assignee", "status", "updated"],
+      columns: [
+        "id",
+        "repo",
+        "title",
+        "labels",
+        "assignee",
+        "status",
+        "updated",
+      ],
     });
 
     await expect(
@@ -234,7 +242,7 @@ describe("github plugin RPC behavior", () => {
     ).toHaveLength(1);
 
     await expect(
-      harness.callRpc("setColumns", { columns: ["labels"] }),
+      harness.callRpc("setColumns", { columns: ["milestone"] }),
     ).rejects.toThrow();
   });
 

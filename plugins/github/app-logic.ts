@@ -196,6 +196,8 @@ export function sortItems(items: readonly Item[], sort: ListSort): Item[] {
         return text(a.title, b.title);
       case "assignee":
         return text(a.assignees[0] ?? "", b.assignees[0] ?? "");
+      case "labels":
+        return text(a.labels[0] ?? "", b.labels[0] ?? "");
       case "status":
         return text(a.state, b.state);
       case "updated":
@@ -203,11 +205,16 @@ export function sortItems(items: readonly Item[], sort: ListSort): Item[] {
     }
   };
   const sign = sort.direction === "asc" ? 1 : -1;
-  const unassignedLast = sort.column === "assignee";
+  const emptyList =
+    sort.column === "assignee"
+      ? (item: Item) => item.assignees.length === 0
+      : sort.column === "labels"
+        ? (item: Item) => item.labels.length === 0
+        : null;
   return [...items].sort((a, b) => {
-    if (unassignedLast) {
-      const aEmpty = a.assignees.length === 0;
-      const bEmpty = b.assignees.length === 0;
+    if (emptyList !== null) {
+      const aEmpty = emptyList(a);
+      const bEmpty = emptyList(b);
       if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
     }
     return sign * compare(a, b);

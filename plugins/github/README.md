@@ -49,7 +49,7 @@ bb plugin reload github
 
 ## List columns
 
-The issue and pull request lists show ID, Repo, Title, Assignee, Status, and
+The issue and pull request lists show ID, Repo, Title, Labels, Assignee, Status, and
 Updated by default. Repo shows the repository name, or `owner/repo` when two
 tracked owners share a name; hover it for the full name. Pick columns from the
 **Columns** menu next to the tabs, or set the ordered `columns` setting:
@@ -59,7 +59,7 @@ bb plugin config github set columns "repo, id, title, status"
 bb plugin config github unset columns
 ```
 
-Available columns: `id`, `repo`, `title`, `assignee`, `status`, `updated`.
+Available columns: `id`, `repo`, `title`, `labels`, `assignee`, `status`, `updated`.
 Title is always shown; unknown names are rejected. Changes apply to open
 panels immediately. Drag a column header to reorder the columns; the new order
 is saved to the same setting.

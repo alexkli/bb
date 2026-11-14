@@ -147,7 +147,7 @@ describe("list sorting", () => {
       column: "title",
       direction: "asc",
     });
-    expect(parseQuery("sort:labels").sort).toBeNull();
+    expect(parseQuery("sort:milestone").sort).toBeNull();
   });
 
   it("sorts by repo then number, and by number across repos", () => {
@@ -171,6 +171,21 @@ describe("list sorting", () => {
       expect(
         key(sortItems(items, { column: "assignee", direction })).at(-1),
       ).toBe("acme/widgets#7");
+    }
+  });
+
+  it("sorts by first label with unlabeled items last", () => {
+    const labeled = [
+      make({ number: 1, labels: [] }),
+      make({ number: 2, labels: ["triage"] }),
+      make({ number: 3, labels: ["Bug", "zz"] }),
+    ];
+    for (const direction of ["asc", "desc"] as const) {
+      expect(
+        sortItems(labeled, { column: "labels", direction }).map(
+          (item) => item.number,
+        ),
+      ).toEqual(direction === "asc" ? [3, 2, 1] : [2, 3, 1]);
     }
   });
 

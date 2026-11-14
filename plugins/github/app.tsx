@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   definePluginApp,
   Markdown,
@@ -543,6 +550,7 @@ const COL: Record<ColumnId | "actions", string> = {
   repo: "min-w-0 max-w-40 shrink truncate @[48rem]:w-32 @[48rem]:max-w-none @[48rem]:shrink-0",
   title:
     "order-first flex min-w-0 basis-full flex-col items-start gap-1.5 @[48rem]:order-none @[48rem]:flex-1 @[48rem]:basis-auto @[48rem]:flex-row @[48rem]:items-center @[48rem]:gap-2",
+  labels: "hidden min-w-0 shrink-0 @[48rem]:flex @[48rem]:w-44",
   assignee: "shrink-0 @[48rem]:w-20",
   status: "shrink-0 @[48rem]:w-24",
   updated: "hidden w-14 shrink-0 text-right @[48rem]:block",
@@ -587,6 +595,61 @@ function ColumnsMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+const LABEL_OVERFLOW_RESERVE_PX = 28;
+
+function LabelsCell({ labels }: { labels: string[] }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [visible, setVisible] = useState(labels.length);
+  useLayoutEffect(() => {
+    const container = ref.current;
+    if (container === null) return;
+    const fit = () => {
+      const right = container.getBoundingClientRect().right;
+      const edges = Array.from(
+        container.querySelectorAll<HTMLElement>("[data-label-chip]"),
+        (chip) => chip.getBoundingClientRect().right,
+      );
+      if (edges.every((edge) => edge <= right)) {
+        setVisible(edges.length);
+        return;
+      }
+      const limit = right - LABEL_OVERFLOW_RESERVE_PX;
+      setVisible(Math.max(1, edges.filter((edge) => edge <= limit).length));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [labels]);
+  if (labels.length === 0) {
+    return <span className="text-xs text-muted-foreground/50">—</span>;
+  }
+  const hidden = labels.length - visible;
+  return (
+    <span
+      ref={ref}
+      className="relative flex w-full min-w-0 items-center gap-1 overflow-hidden"
+      title={labels.join(", ")}
+    >
+      {labels.map((label, index) => (
+        <Badge
+          key={label}
+          data-label-chip
+          variant="secondary"
+          className={`shrink-0 font-normal text-muted-foreground ${index >= visible ? "invisible" : ""}`}
+        >
+          {label}
+        </Badge>
+      ))}
+      {hidden > 0 ? (
+        <span className="absolute right-0 text-xs text-muted-foreground">
+          +{hidden}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -765,11 +828,13 @@ function ItemCell({
           <span className="min-w-0 flex-1 line-clamp-3 text-sm font-medium leading-snug text-foreground @[48rem]:line-clamp-1 @[48rem]:leading-normal">
             {item.title}
           </span>
-          <LabelChips
-            labels={item.labels}
-            className="hidden shrink-0 @[60rem]:flex"
-          />
           <ThreadPills links={links} />
+        </span>
+      );
+    case "labels":
+      return (
+        <span className={COL.labels}>
+          <LabelsCell labels={item.labels} />
         </span>
       );
     case "assignee":
@@ -851,6 +916,7 @@ const SKELETON_CELL: Record<ColumnId, string> = {
   id: "h-3 w-10",
   repo: "h-3 w-20",
   title: "h-3 w-4/5",
+  labels: "h-3 w-24",
   assignee: "size-5 rounded-full @[48rem]:h-3 @[48rem]:w-16",
   status: "h-3 w-16",
   updated: "ml-auto h-3 w-12",

@@ -29,7 +29,7 @@ describe("list columns setting", () => {
   });
 
   it("reports unknown entries", () => {
-    expect(parseColumns("id, labels, title").ignored).toEqual(["labels"]);
+    expect(parseColumns("id, milestone, title").ignored).toEqual(["milestone"]);
   });
 });
 
