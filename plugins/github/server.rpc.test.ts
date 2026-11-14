@@ -232,19 +232,26 @@ describe("github plugin RPC behavior", () => {
 
     await expect(harness.callRpc("columns")).resolves.toEqual({
       columns: ["id", "repo", "title", "assignee", "status", "updated"],
+      widths: {},
     });
+    await expect(
+      harness.callRpc("setColumnWidths", {
+        widths: { repo: 180, updated: 9999 },
+      }),
+    ).resolves.toMatchObject({ widths: { repo: 180, updated: 640 } });
 
     await expect(
       harness.callRpc("setColumns", { columns: ["repo", "title", "status"] }),
     ).resolves.toEqual({ columns: ["repo", "title", "status"] });
     await expect(harness.callRpc("columns")).resolves.toEqual({
       columns: ["repo", "title", "status"],
+      widths: { repo: 180, updated: 640 },
     });
     expect(
       harness.realtimeSignals.filter(
         (signal) => signal.channel === "columns-changed",
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
 
     await expect(
       harness.callRpc("setColumns", { columns: ["priority"] }),
@@ -260,6 +267,7 @@ describe("github plugin RPC behavior", () => {
 
     await expect(host.harness.callRpc("columns")).resolves.toEqual({
       columns: ["title", "status", "repo"],
+      widths: {},
     });
   });
 

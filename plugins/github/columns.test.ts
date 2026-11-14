@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   columnsForKind,
   DEFAULT_COLUMNS,
+  formatColumnWidths,
+  parseColumnWidths,
   moveColumn,
   parseColumns,
   repoLabels,
@@ -91,5 +93,29 @@ describe("columns per tab", () => {
     const columns = ["id", "review", "title", "checks", "author"] as const;
     expect(columnsForKind(columns, "issue")).toEqual(["id", "title", "author"]);
     expect(columnsForKind(columns, "pr")).toEqual([...columns]);
+  });
+});
+
+describe("column widths setting", () => {
+  it("parses column=pixels pairs, clamps them, and rejects the title", () => {
+    expect(parseColumnWidths("repo=160, Labels = 9999px, id=4").widths).toEqual(
+      {
+        repo: 160,
+        labels: 640,
+        id: 32,
+      },
+    );
+    expect(parseColumnWidths("title=300, repo=wide, nope=10").ignored).toEqual([
+      "title=300",
+      "repo=wide",
+      "nope=10",
+    ]);
+  });
+
+  it("formats widths in canonical column order", () => {
+    expect(formatColumnWidths({ updated: 80, repo: 150.6 })).toBe(
+      "repo=151, updated=80",
+    );
+    expect(formatColumnWidths({})).toBe("");
   });
 });

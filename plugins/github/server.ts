@@ -15,7 +15,10 @@ import { z } from "zod";
 import {
   COLUMN_IDS,
   DEFAULT_COLUMNS_SETTING,
+  formatColumnWidths,
   parseColumns,
+  parseColumnWidths,
+  type ColumnWidths,
 } from "./columns.js";
 import {
   GITHUB_HOST,
@@ -93,6 +96,16 @@ const syncResultSchema = z
 const okResultSchema = z.object({ ok: z.literal(true) }).strict();
 const columnsResultSchema = z
   .object({ columns: z.array(z.enum(COLUMN_IDS)).min(1) })
+  .strict();
+const columnWidthsSchema = z.partialRecord(
+  z.enum(COLUMN_IDS),
+  z.number().int().positive(),
+);
+const columnLayoutSchema = z
+  .object({
+    columns: z.array(z.enum(COLUMN_IDS)).min(1),
+    widths: columnWidthsSchema,
+  })
   .strict();
 const commentSchema = z
   .object({ author: z.string(), body: z.string(), createdAt: z.string() })
@@ -208,7 +221,11 @@ export const githubRpcContract = defineRpcContract({
   },
   columns: {
     input: z.null(),
-    output: columnsResultSchema,
+    output: columnLayoutSchema,
+  },
+  setColumnWidths: {
+    input: z.object({ widths: columnWidthsSchema }).strict(),
+    output: columnLayoutSchema,
   },
   people: {
     input: z.null(),
@@ -744,10 +761,40 @@ export default async function plugin(bb: BbPluginApi) {
       }),
       default: DEFAULT_COLUMNS_SETTING,
     },
+    columnWidths: {
+      type: "string",
+      label: "List column widths",
+      description:
+        'Comma-separated "column=pixels" list, for example "repo=160, labels=220". Columns not listed use their default width; the title takes the remaining space.',
+      experimental_schema: z.string().superRefine((value, context) => {
+        const { ignored } = parseColumnWidths(value);
+        if (ignored.length > 0) {
+          context.addIssue({
+            code: "custom",
+            message: `Use "column=pixels" for every entry. Invalid: ${ignored.join(", ")}`,
+          });
+        }
+      }),
+      default: "",
+    },
   });
 
+  async function columnLayout(): Promise<{
+    columns: ReturnType<typeof parseColumns>["columns"];
+    widths: ColumnWidths;
+  }> {
+    const values = await settings.get();
+    return {
+      columns: parseColumns(values.columns).columns,
+      widths: parseColumnWidths(values.columnWidths).widths,
+    };
+  }
+
   settings.onChange((next, prev) => {
-    if (next.columns !== prev.columns) {
+    if (
+      next.columns !== prev.columns ||
+      next.columnWidths !== prev.columnWidths
+    ) {
       bb.realtime.publish("columns-changed", {});
     }
   });
@@ -1542,7 +1589,14 @@ export default async function plugin(bb: BbPluginApi) {
     },
 
     async columns() {
-      return { columns: parseColumns((await settings.get()).columns).columns };
+      return await columnLayout();
+    },
+
+    async setColumnWidths(input) {
+      await settings.experimental_set({
+        columnWidths: formatColumnWidths(input.widths),
+      });
+      return await columnLayout();
     },
 
     async setColumns(input) {

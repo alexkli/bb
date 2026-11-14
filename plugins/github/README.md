@@ -96,6 +96,18 @@ PR-only columns are skipped on the Issues tab. Unknown names are rejected.
 Changes apply to open panels immediately. Drag a column header to reorder the
 columns; the new order is saved to the same setting.
 
+Drag the right edge of a column header to resize it; double-click the edge to
+restore its default width, or use **Reset column widths** in the Columns menu.
+Title is not resizable: it takes the remaining space. Widths are saved to the
+`columnWidths` setting:
+
+```
+bb plugin config github set columnWidths "repo=160, labels=220"
+bb plugin config github unset columnWidths
+```
+
+Widths are in pixels, clamped to 32–640, and apply to the wide layout only.
+
 Click a column header to sort by it, and click again to reverse. The sort is a
 filter qualifier, `sort:<column>-<asc|desc>` (for example `sort:repo-asc`), so
 it can also be typed into the filter and is remembered with it. Without one,

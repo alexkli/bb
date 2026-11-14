@@ -40,8 +40,10 @@ import {
   type SuggestionIcon,
 } from "./app-logic.js";
 import {
+  clampColumnWidth,
   COLUMN_IDS,
   COLUMN_LABELS,
+  type ColumnWidths,
   columnsForKind,
   DEFAULT_COLUMNS,
   moveColumn,
@@ -152,18 +154,46 @@ function useItems(kind: "issue" | "pr"): {
   return state;
 }
 
+interface ColumnWidthsState {
+  widths: ColumnWidths;
+  setWidths: (next: ColumnWidths) => void;
+}
+
+const ColumnWidthsContext = createContext<ColumnWidthsState>({
+  widths: {},
+  setWidths: () => {},
+});
+
 function useColumns(): {
   columns: ColumnId[] | null;
   setColumns: (next: ColumnId[]) => void;
+  widths: ColumnWidthsState;
 } {
   const rpc = useRpc<typeof githubRpcContract>();
   const [columns, setColumnsState] = useState<ColumnId[] | null>(null);
+  const [widths, setWidthsState] = useState<ColumnWidths>({});
   const refetch = useCallback(() => {
     rpc.call("columns").then(
-      (result) => setColumnsState(result.columns),
+      (result) => {
+        setColumnsState(result.columns);
+        setWidthsState(result.widths);
+      },
       () => setColumnsState([...DEFAULT_COLUMNS]),
     );
   }, [rpc]);
+  const setWidths = useCallback(
+    (next: ColumnWidths) => {
+      setWidthsState(next);
+      rpc.call("setColumnWidths", { widths: next }).then(
+        (result) => setWidthsState(result.widths),
+        (error: unknown) => {
+          toast.error(errorText(error));
+          refetch();
+        },
+      );
+    },
+    [rpc, refetch],
+  );
   useEffect(() => {
     refetch();
   }, [refetch]);
@@ -181,7 +211,11 @@ function useColumns(): {
     },
     [rpc, refetch],
   );
-  return { columns, setColumns };
+  const widthsState = useMemo(
+    () => ({ widths, setWidths }),
+    [widths, setWidths],
+  );
+  return { columns, setColumns, widths: widthsState };
 }
 
 function useLinks(): LinksMap {
@@ -604,29 +638,52 @@ function FilterBar({
 }
 
 const COL: Record<ColumnId | "actions", string> = {
-  id: "shrink-0 @[48rem]:w-12",
-  repo: "min-w-0 max-w-40 shrink truncate @[48rem]:w-32 @[48rem]:max-w-none @[48rem]:shrink-0",
+  id: "shrink-0 @[48rem]:w-[var(--col-id,3rem)] @[48rem]:overflow-hidden",
+  repo: "min-w-0 max-w-40 shrink truncate @[48rem]:w-[var(--col-repo,8rem)] @[48rem]:overflow-hidden @[48rem]:max-w-none @[48rem]:shrink-0",
   title:
     "order-first flex min-w-0 basis-full flex-col items-start gap-1.5 @[48rem]:order-none @[48rem]:flex-1 @[48rem]:basis-auto @[48rem]:flex-row @[48rem]:items-center @[48rem]:gap-2",
-  labels: "hidden min-w-0 shrink-0 @[48rem]:flex @[48rem]:w-44",
-  author: "hidden shrink-0 @[48rem]:flex @[48rem]:w-16",
-  assignee: "shrink-0 @[48rem]:w-20",
-  status: "shrink-0 @[48rem]:w-24",
-  review: "shrink-0 @[48rem]:w-24",
-  checks: "shrink-0 items-center gap-1.5 @[48rem]:w-20",
-  draft: "hidden shrink-0 @[48rem]:block @[48rem]:w-12",
-  size: "hidden shrink-0 whitespace-nowrap text-right @[48rem]:block @[48rem]:w-24",
-  agent: "shrink-0 @[48rem]:w-24",
-  comments: "hidden w-10 shrink-0 text-right @[48rem]:block",
-  milestone: "hidden min-w-0 shrink-0 truncate @[48rem]:block @[48rem]:w-28",
-  created: "hidden w-14 shrink-0 text-right @[48rem]:block",
-  updated: "hidden w-14 shrink-0 text-right @[48rem]:block",
+  labels:
+    "hidden min-w-0 shrink-0 @[48rem]:flex @[48rem]:w-[var(--col-labels,11rem)] @[48rem]:overflow-hidden",
+  author:
+    "hidden shrink-0 @[48rem]:flex @[48rem]:w-[var(--col-author,4rem)] @[48rem]:overflow-hidden",
+  assignee:
+    "shrink-0 @[48rem]:w-[var(--col-assignee,5rem)] @[48rem]:overflow-hidden",
+  status:
+    "shrink-0 @[48rem]:w-[var(--col-status,6rem)] @[48rem]:overflow-hidden",
+  review:
+    "shrink-0 @[48rem]:w-[var(--col-review,6rem)] @[48rem]:overflow-hidden",
+  checks:
+    "shrink-0 items-center gap-1.5 @[48rem]:w-[var(--col-checks,5rem)] @[48rem]:overflow-hidden",
+  draft:
+    "hidden shrink-0 @[48rem]:block @[48rem]:w-[var(--col-draft,3rem)] @[48rem]:overflow-hidden",
+  size: "hidden shrink-0 whitespace-nowrap text-right @[48rem]:block @[48rem]:w-[var(--col-size,6rem)] @[48rem]:overflow-hidden",
+  agent: "shrink-0 @[48rem]:w-[var(--col-agent,6rem)] @[48rem]:overflow-hidden",
+  comments:
+    "hidden @[48rem]:w-[var(--col-comments,2.5rem)] @[48rem]:overflow-hidden shrink-0 text-right @[48rem]:block",
+  milestone:
+    "hidden min-w-0 shrink-0 truncate @[48rem]:block @[48rem]:w-[var(--col-milestone,7rem)] @[48rem]:overflow-hidden",
+  created:
+    "hidden @[48rem]:w-[var(--col-created,3.5rem)] @[48rem]:overflow-hidden shrink-0 text-right @[48rem]:block",
+  updated:
+    "hidden @[48rem]:w-[var(--col-updated,3.5rem)] @[48rem]:overflow-hidden shrink-0 text-right @[48rem]:block",
   actions:
     "ml-auto flex shrink-0 items-center justify-end gap-1 @[48rem]:ml-0 @[48rem]:w-24",
 };
 
 const ROW_CLASS =
   "flex flex-wrap items-center gap-2 px-3 py-3 @[48rem]:flex-nowrap @[48rem]:gap-3 @[48rem]:py-2";
+
+function ResetWidthsItem() {
+  const { widths, setWidths } = useContext(ColumnWidthsContext);
+  return (
+    <DropdownMenuItem
+      disabled={Object.keys(widths).length === 0}
+      onSelect={() => setWidths({})}
+    >
+      Reset column widths
+    </DropdownMenuItem>
+  );
+}
 
 function ColumnsMenu({
   columns,
@@ -645,6 +702,8 @@ function ColumnsMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>Columns</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <ResetWidthsItem />
         <DropdownMenuSeparator />
         {[
           ...COLUMN_IDS.filter((column) => !PR_ONLY_COLUMNS.has(column)),
@@ -1226,6 +1285,15 @@ function ItemsTable({
     [repos],
   );
   const shown = columnsForKind(columns ?? DEFAULT_COLUMNS, kind);
+  const { widths, setWidths } = useContext(ColumnWidthsContext);
+  const [draft, setDraft] = useState<ColumnWidths | null>(null);
+  const effective = draft ?? widths;
+  const widthVars = Object.fromEntries(
+    Object.entries(effective).map(([column, width]) => [
+      `--col-${column}`,
+      `${width}px`,
+    ]),
+  ) as React.CSSProperties;
 
   let body: React.ReactNode;
   if (error !== null) {
@@ -1260,9 +1328,22 @@ function ItemsTable({
   }
 
   return (
-    <div className="@container overflow-hidden rounded-lg border border-border bg-card">
+    <div
+      className="@container overflow-hidden rounded-lg border border-border bg-card"
+      style={widthVars}
+    >
       <TableHeader
         columns={shown}
+        onResize={(column, width) =>
+          setDraft({ ...effective, [column]: width })
+        }
+        onResizeEnd={(column, width) => {
+          const next = { ...widths };
+          if (width === null) delete next[column];
+          else next[column] = width;
+          setDraft(null);
+          setWidths(next);
+        }}
         sort={sort}
         onSort={onSort}
         onMove={
@@ -1296,17 +1377,83 @@ function SortArrow({ direction }: { direction: SortDirection }) {
   );
 }
 
+function ResizeHandle({
+  label,
+  onStart,
+  onResize,
+  onEnd,
+  onCancel,
+}: {
+  label: string;
+  onStart: () => void;
+  onResize: (width: number) => void;
+  onEnd: (width: number | null) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <span
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize ${label} column`}
+      title="Drag to resize, double-click to reset"
+      className="group/resize absolute inset-y-0 -right-2 z-10 flex w-3 cursor-col-resize touch-none justify-center"
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        onEnd(null);
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const handle = event.currentTarget;
+        const cell = handle.parentElement;
+        if (cell === null) return;
+        const startWidth = cell.getBoundingClientRect().width;
+        const startX = event.clientX;
+        let latest = startWidth;
+        let moved = false;
+        onStart();
+        handle.setPointerCapture(event.pointerId);
+        const move = (next: PointerEvent) => {
+          moved = true;
+          latest = clampColumnWidth(startWidth + next.clientX - startX);
+          onResize(latest);
+        };
+        const end = () => {
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", end);
+          handle.removeEventListener("pointercancel", end);
+          if (moved) onEnd(latest);
+          else onCancel();
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", end);
+        handle.addEventListener("pointercancel", end);
+      }}
+    >
+      <span className="h-full w-0.5 rounded-full bg-primary opacity-0 transition-opacity group-hover/resize:opacity-60" />
+    </span>
+  );
+}
+
 function TableHeader({
   columns,
   sort,
   onSort,
   onMove,
+  onResize,
+  onResizeEnd,
 }: {
   columns: ColumnId[];
   sort: ListSort;
   onSort: (column: ColumnId) => void;
   onMove: ((column: ColumnId, target: ColumnId, after: boolean) => void) | null;
+  onResize: (column: ColumnId, width: number) => void;
+  onResizeEnd: (column: ColumnId, width: number | null) => void;
 }) {
+  const resizing = useRef(false);
   const [dragging, setDragging] = useState<ColumnId | null>(null);
   const [drop, setDrop] = useState<{
     target: ColumnId;
@@ -1331,6 +1478,10 @@ function TableHeader({
               onMove === null ? undefined : "Click to sort, drag to reorder"
             }
             onDragStart={(event) => {
+              if (resizing.current) {
+                event.preventDefault();
+                return;
+              }
               event.dataTransfer.effectAllowed = "move";
               event.dataTransfer.setData("text/plain", column);
               setDragging(column);
@@ -1362,6 +1513,22 @@ function TableHeader({
                 className={`absolute inset-y-0 w-0.5 rounded-full bg-primary ${drop.after ? "-right-1.5" : "-left-1.5"}`}
               />
             ) : null}
+            {column === "title" ? null : (
+              <ResizeHandle
+                label={COLUMN_LABELS[column]}
+                onStart={() => {
+                  resizing.current = true;
+                }}
+                onResize={(width) => onResize(column, width)}
+                onEnd={(width) => {
+                  resizing.current = false;
+                  onResizeEnd(column, width);
+                }}
+                onCancel={() => {
+                  resizing.current = false;
+                }}
+              />
+            )}
             <button
               type="button"
               className={`inline-flex max-w-full items-center gap-1 uppercase tracking-wider hover:text-foreground ${active ? "text-foreground" : ""}`}
@@ -2739,7 +2906,7 @@ function GithubPanelBody({
     },
     [navigate],
   );
-  const { columns, setColumns } = useColumns();
+  const { columns, setColumns, widths } = useColumns();
   if (status !== null && status.ghState === "unavailable") {
     return (
       <EmptyState
@@ -2800,40 +2967,42 @@ function GithubPanelBody({
 
   const kind = route.view === "pulls" ? "pr" : "issue";
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <Tabs
-          value={route.view}
-          onValueChange={(value) => {
-            navigate(
-              value === "pulls" ? { view: "pulls" } : { view: "issues" },
-            );
-          }}
-        >
-          <TabsList>
-            <TabsTrigger value="issues">Issues</TabsTrigger>
-            <TabsTrigger value="pulls">Pull requests</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <div className="flex-1" />
-        <ColumnsMenu columns={columns} onChange={setColumns} />
-        {route.view === "issues" ? (
-          <Button size="sm" onClick={() => navigate({ view: "new" })}>
-            New issue
-          </Button>
-        ) : null}
-      </div>
+    <ColumnWidthsContext.Provider value={widths}>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <Tabs
+            value={route.view}
+            onValueChange={(value) => {
+              navigate(
+                value === "pulls" ? { view: "pulls" } : { view: "issues" },
+              );
+            }}
+          >
+            <TabsList>
+              <TabsTrigger value="issues">Issues</TabsTrigger>
+              <TabsTrigger value="pulls">Pull requests</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <div className="flex-1" />
+          <ColumnsMenu columns={columns} onChange={setColumns} />
+          {route.view === "issues" ? (
+            <Button size="sm" onClick={() => navigate({ view: "new" })}>
+              New issue
+            </Button>
+          ) : null}
+        </div>
 
-      <ListView
-        kind={kind}
-        query={query}
-        setQuery={setQuery}
-        repos={status?.repos ?? []}
-        columns={columns}
-        onColumnsChange={setColumns}
-        onOpenItem={(repo, number) => openItem(kind, repo, number)}
-      />
-    </div>
+        <ListView
+          kind={kind}
+          query={query}
+          setQuery={setQuery}
+          repos={status?.repos ?? []}
+          columns={columns}
+          onColumnsChange={setColumns}
+          onOpenItem={(repo, number) => openItem(kind, repo, number)}
+        />
+      </div>
+    </ColumnWidthsContext.Provider>
   );
 }
 

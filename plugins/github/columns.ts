@@ -137,3 +137,48 @@ export function repoLabels(repos: readonly string[]): Map<string, string> {
   }
   return labels;
 }
+
+export type ColumnWidths = Partial<Record<ColumnId, number>>;
+
+export const MIN_COLUMN_WIDTH = 32;
+export const MAX_COLUMN_WIDTH = 640;
+
+export function clampColumnWidth(width: number): number {
+  return Math.round(
+    Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, width)),
+  );
+}
+
+export function parseColumnWidths(value: string): {
+  widths: ColumnWidths;
+  ignored: string[];
+} {
+  const widths: ColumnWidths = {};
+  const ignored: string[] = [];
+  for (const raw of value.split(",")) {
+    const entry = raw.trim();
+    if (entry.length === 0) continue;
+    const match = /^([a-z]+)\s*=\s*(\d+)(?:px)?$/i.exec(entry);
+    const column = match?.[1]?.toLowerCase();
+    if (
+      match === null ||
+      column === undefined ||
+      !isColumnId(column) ||
+      column === "title"
+    ) {
+      ignored.push(entry);
+      continue;
+    }
+    widths[column] = clampColumnWidth(Number(match[2]));
+  }
+  return { widths, ignored };
+}
+
+export function formatColumnWidths(widths: ColumnWidths): string {
+  return COLUMN_IDS.flatMap((column) => {
+    const width = widths[column];
+    return width === undefined || column === "title"
+      ? []
+      : [`${column}=${clampColumnWidth(width)}`];
+  }).join(", ");
+}
