@@ -15,18 +15,25 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import {
   buildSuggestions,
+  DEFAULT_SORT,
   matchesQuery,
+  nextSort,
   parseQuery,
   parseSubPath,
   routeToSubPath,
+  sortItems,
+  withSort,
   type Item,
+  type ListSort,
   type Route,
+  type SortDirection,
   type Suggestion,
   type SuggestionIcon,
 } from "./app-logic.js";
 import {
   COLUMN_IDS,
   COLUMN_LABELS,
+  moveColumn,
   repoLabels,
   toggleColumn,
   type ColumnId,
@@ -894,6 +901,9 @@ function ItemsTable({
   repos,
   error,
   hasFilter,
+  sort,
+  onSort,
+  onColumnsChange,
   onOpenItem,
 }: {
   kind: "issue" | "pr";
@@ -902,6 +912,9 @@ function ItemsTable({
   repos: RepoInfo[];
   error: string | null;
   hasFilter: boolean;
+  sort: ListSort;
+  onSort: (column: ColumnId) => void;
+  onColumnsChange: (next: ColumnId[]) => void;
   onOpenItem: (repo: string, number: number) => void;
 }) {
   const links = useLinks();
@@ -945,18 +958,124 @@ function ItemsTable({
 
   return (
     <div className="@container overflow-hidden rounded-lg border border-border bg-card">
-      <div className="hidden items-center gap-3 border-b border-border bg-muted/50 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground @[48rem]:flex">
-        {shown.map((column) => (
+      <TableHeader
+        columns={shown}
+        sort={sort}
+        onSort={onSort}
+        onReorder={columns === null ? null : onColumnsChange}
+      />
+      {body}
+    </div>
+  );
+}
+
+function SortArrow({ direction }: { direction: SortDirection }) {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+      aria-hidden
+    >
+      <path d={direction === "asc" ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
+    </svg>
+  );
+}
+
+function TableHeader({
+  columns,
+  sort,
+  onSort,
+  onReorder,
+}: {
+  columns: ColumnId[];
+  sort: ListSort;
+  onSort: (column: ColumnId) => void;
+  onReorder: ((next: ColumnId[]) => void) | null;
+}) {
+  const [dragging, setDragging] = useState<ColumnId | null>(null);
+  const [drop, setDrop] = useState<{
+    target: ColumnId;
+    after: boolean;
+  } | null>(null);
+  const reset = () => {
+    setDragging(null);
+    setDrop(null);
+  };
+  return (
+    <div className="hidden items-center gap-3 border-b border-border bg-muted/50 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground @[48rem]:flex">
+      {columns.map((column) => {
+        const active = sort.column === column;
+        const showDrop =
+          drop !== null && drop.target === column && dragging !== column;
+        return (
           <span
             key={column}
-            className={column === "title" ? "min-w-0 flex-1" : COL[column]}
+            className={`relative ${column === "title" ? "min-w-0 flex-1" : COL[column]} ${dragging === column ? "opacity-50" : ""} ${onReorder === null ? "" : "cursor-grab"}`}
+            draggable={onReorder !== null}
+            title={
+              onReorder === null ? undefined : "Click to sort, drag to reorder"
+            }
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", column);
+              setDragging(column);
+            }}
+            onDragOver={(event) => {
+              if (dragging === null) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              const rect = event.currentTarget.getBoundingClientRect();
+              const after = event.clientX > rect.left + rect.width / 2;
+              if (drop?.target !== column || drop.after !== after) {
+                setDrop({ target: column, after });
+              }
+            }}
+            onDragLeave={() => {
+              if (drop?.target === column) setDrop(null);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (dragging !== null && drop !== null && onReorder !== null) {
+                onReorder(
+                  moveColumn(columns, dragging, drop.target, drop.after),
+                );
+              }
+              reset();
+            }}
+            onDragEnd={reset}
           >
-            {COLUMN_LABELS[column]}
+            {showDrop ? (
+              <span
+                className={`absolute inset-y-0 w-0.5 rounded-full bg-primary ${drop.after ? "-right-1.5" : "-left-1.5"}`}
+              />
+            ) : null}
+            <button
+              type="button"
+              className={`inline-flex max-w-full items-center gap-1 uppercase tracking-wider hover:text-foreground ${active ? "text-foreground" : ""}`}
+              onClick={() => onSort(column)}
+              aria-label={`Sort by ${COLUMN_LABELS[column]}`}
+              aria-sort={
+                active
+                  ? sort.direction === "asc"
+                    ? "ascending"
+                    : "descending"
+                  : undefined
+              }
+            >
+              <span className="truncate">{COLUMN_LABELS[column]}</span>
+              {active ? <SortArrow direction={sort.direction} /> : null}
+            </button>
           </span>
-        ))}
-        <span className={COL.actions} />
-      </div>
-      {body}
+        );
+      })}
+      <span className={COL.actions} />
     </div>
   );
 }
@@ -2220,6 +2339,7 @@ function ListView({
   setQuery,
   repos,
   columns,
+  onColumnsChange,
   onOpenItem,
 }: {
   kind: "issue" | "pr";
@@ -2227,16 +2347,21 @@ function ListView({
   setQuery: (query: string) => void;
   repos: RepoInfo[];
   columns: ColumnId[] | null;
+  onColumnsChange: (next: ColumnId[]) => void;
   onOpenItem: (repo: string, number: number) => void;
 }) {
   const { items, error } = useItems(kind);
   const viewer = useViewer();
   const parsed = useMemo(() => parseQuery(query), [query]);
+  const sort: ListSort = parsed.sort ?? DEFAULT_SORT;
   const filtered = useMemo(
     () =>
       items === null
         ? null
-        : items.filter((item) => matchesQuery(item, parsed, viewer)),
+        : sortItems(
+            items.filter((item) => matchesQuery(item, parsed, viewer)),
+            parsed.sort ?? DEFAULT_SORT,
+          ),
     [items, parsed, viewer],
   );
   return (
@@ -2254,7 +2379,10 @@ function ListView({
         columns={columns}
         repos={repos}
         error={error}
-        hasFilter={query.trim().length > 0}
+        hasFilter={withSort(query, null).trim().length > 0}
+        sort={sort}
+        onSort={(column) => setQuery(withSort(query, nextSort(sort, column)))}
+        onColumnsChange={onColumnsChange}
         onOpenItem={onOpenItem}
       />
     </>
@@ -2371,6 +2499,7 @@ function GithubPanelBody({
         setQuery={setQuery}
         repos={status?.repos ?? []}
         columns={columns}
+        onColumnsChange={setColumns}
         onOpenItem={(repo, number) => openItem(kind, repo, number)}
       />
     </div>

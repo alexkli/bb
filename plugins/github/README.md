@@ -61,7 +61,13 @@ bb plugin config github unset columns
 
 Available columns: `id`, `repo`, `title`, `assignee`, `status`, `updated`.
 Title is always shown; unknown names are rejected. Changes apply to open
-panels immediately.
+panels immediately. Drag a column header to reorder the columns; the new order
+is saved to the same setting.
+
+Click a column header to sort by it, and click again to reverse. The sort is a
+filter qualifier, `sort:<column>-<asc|desc>` (for example `sort:repo-asc`), so
+it can also be typed into the filter and is remembered with it. Without one,
+lists are sorted by `updated-desc`.
 
 A background service refreshes immediately on startup, then waits 15 minutes
 after each completed sync. Each tracked repository uses one bounded `gh api graphql`

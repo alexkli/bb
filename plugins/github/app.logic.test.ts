@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildSuggestions,
   matchesQuery,
+  nextSort,
   parseQuery,
   parseSubPath,
   routeToSubPath,
+  sortItems,
+  withSort,
   type Item,
   type Route,
 } from "./app-logic.js";
@@ -66,6 +69,7 @@ describe("github panel query engine", () => {
       repos: ["acme/widgets"],
       noAssignee: false,
       noLabel: false,
+      sort: null,
       text: ["#7"],
     });
     expect(matchesQuery(issue, parsed, "octocat")).toBe(true);
@@ -122,5 +126,69 @@ describe("github panel query engine", () => {
     expect(
       buildSuggestions("author:ali", vocab, "issue", "octocat")[0]?.icon,
     ).toEqual({ kind: "avatar", login: "alice" });
+  });
+});
+
+describe("list sorting", () => {
+  const make = (overrides: Partial<Item>): Item => ({ ...issue, ...overrides });
+  const items = [
+    make({ repo: "acme/widgets", number: 7, title: "beta", assignees: [] }),
+    make({ repo: "acme/api", number: 12, title: "Alpha", assignees: ["zed"] }),
+    make({ repo: "acme/api", number: 3, title: "gamma", assignees: ["amy"] }),
+  ];
+  const key = (list: Item[]) =>
+    list.map((item) => `${item.repo}#${item.number}`);
+
+  it("reads sort qualifiers without treating them as search text", () => {
+    const parsed = parseQuery("is:open sort:repo-desc bug");
+    expect(parsed.sort).toEqual({ column: "repo", direction: "desc" });
+    expect(parsed.text).toEqual(["bug"]);
+    expect(parseQuery("sort:title").sort).toEqual({
+      column: "title",
+      direction: "asc",
+    });
+    expect(parseQuery("sort:labels").sort).toBeNull();
+  });
+
+  it("sorts by repo then number, and by number across repos", () => {
+    expect(key(sortItems(items, { column: "repo", direction: "asc" }))).toEqual(
+      ["acme/api#3", "acme/api#12", "acme/widgets#7"],
+    );
+    expect(key(sortItems(items, { column: "id", direction: "desc" }))).toEqual([
+      "acme/api#12",
+      "acme/widgets#7",
+      "acme/api#3",
+    ]);
+  });
+
+  it("sorts titles case-insensitively and keeps unassigned items last", () => {
+    expect(
+      sortItems(items, { column: "title", direction: "asc" }).map(
+        (item) => item.title,
+      ),
+    ).toEqual(["Alpha", "beta", "gamma"]);
+    for (const direction of ["asc", "desc"] as const) {
+      expect(
+        key(sortItems(items, { column: "assignee", direction })).at(-1),
+      ).toBe("acme/widgets#7");
+    }
+  });
+
+  it("rewrites the sort qualifier and toggles direction on repeat clicks", () => {
+    expect(
+      withSort("is:open sort:id-asc bug ", {
+        column: "repo",
+        direction: "asc",
+      }),
+    ).toBe("is:open bug sort:repo-asc ");
+    expect(withSort("sort:repo-asc ", null)).toBe("");
+    expect(nextSort({ column: "repo", direction: "asc" }, "repo")).toEqual({
+      column: "repo",
+      direction: "desc",
+    });
+    expect(nextSort({ column: "repo", direction: "asc" }, "updated")).toEqual({
+      column: "updated",
+      direction: "desc",
+    });
   });
 });

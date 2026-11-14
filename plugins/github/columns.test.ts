@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_COLUMNS,
+  moveColumn,
   parseColumns,
   repoLabels,
   toggleColumn,
@@ -62,5 +63,24 @@ describe("repo labels", () => {
     expect(labels.get("acme/widgets")).toBe("widgets");
     expect(labels.get("acme/api")).toBe("acme/api");
     expect(labels.get("other/API")).toBe("other/API");
+  });
+});
+
+describe("moving columns", () => {
+  it("drops a column before or after the target", () => {
+    const columns = ["id", "repo", "title", "status"] as const;
+    expect(moveColumn(columns, "status", "id", false)).toEqual([
+      "status",
+      "id",
+      "repo",
+      "title",
+    ]);
+    expect(moveColumn(columns, "id", "title", true)).toEqual([
+      "repo",
+      "title",
+      "id",
+      "status",
+    ]);
+    expect(moveColumn(columns, "id", "updated", true)).toEqual([...columns]);
   });
 });

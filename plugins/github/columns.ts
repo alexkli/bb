@@ -65,6 +65,19 @@ export function toggleColumn(
   return next;
 }
 
+export function moveColumn(
+  columns: readonly ColumnId[],
+  column: ColumnId,
+  target: ColumnId,
+  placeAfter: boolean,
+): ColumnId[] {
+  if (column === target || !columns.includes(target)) return [...columns];
+  const next = columns.filter((entry) => entry !== column);
+  const targetIndex = next.indexOf(target);
+  next.splice(placeAfter ? targetIndex + 1 : targetIndex, 0, column);
+  return next;
+}
+
 export function repoLabels(repos: readonly string[]): Map<string, string> {
   const nameCounts = new Map<string, number>();
   for (const repo of repos) {

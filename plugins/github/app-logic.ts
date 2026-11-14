@@ -1,5 +1,6 @@
 import type { PluginRpcResult } from "@get-bb/plugin-sdk/app";
 import type { githubRpcContract } from "./server.js";
+import { COLUMN_IDS, type ColumnId } from "./columns.js";
 
 export type Item = PluginRpcResult<
   (typeof githubRpcContract)["listItems"]
@@ -46,6 +47,33 @@ export function routeToSubPath(route: Route): string {
   }
 }
 
+export type SortDirection = "asc" | "desc";
+
+export interface ListSort {
+  column: ColumnId;
+  direction: SortDirection;
+}
+
+export const DEFAULT_SORT: ListSort = { column: "updated", direction: "desc" };
+
+export function defaultSortDirection(column: ColumnId): SortDirection {
+  return column === "updated" || column === "id" ? "desc" : "asc";
+}
+
+function parseSort(value: string): ListSort | null {
+  const match = /^([a-z]+)(?:-(asc|desc))?$/.exec(value.toLowerCase());
+  if (match === null) return null;
+  const column = (COLUMN_IDS as readonly string[]).find(
+    (id) => id === match[1],
+  ) as ColumnId | undefined;
+  if (column === undefined) return null;
+  const direction =
+    match[2] === "asc" || match[2] === "desc"
+      ? match[2]
+      : defaultSortDirection(column);
+  return { column, direction };
+}
+
 interface ParsedQuery {
   states: string[];
   assignees: string[];
@@ -54,6 +82,7 @@ interface ParsedQuery {
   repos: string[];
   noAssignee: boolean;
   noLabel: boolean;
+  sort: ListSort | null;
   text: string[];
 }
 
@@ -80,6 +109,7 @@ export function parseQuery(query: string): ParsedQuery {
     repos: [],
     noAssignee: false,
     noLabel: false,
+    sort: null,
     text: [],
   };
   for (const token of tokenizeQuery(query)) {
@@ -99,6 +129,8 @@ export function parseQuery(query: string): ParsedQuery {
       parsed.labels.push(value.toLowerCase());
     } else if (key === "repo") {
       parsed.repos.push(value.toLowerCase());
+    } else if (key === "sort") {
+      parsed.sort = parseSort(value) ?? parsed.sort;
     } else if (key === "no") {
       if (value.toLowerCase() === "assignee") parsed.noAssignee = true;
       if (value.toLowerCase() === "label") parsed.noLabel = true;
@@ -151,6 +183,55 @@ export function matchesQuery(
   return true;
 }
 
+export function sortItems(items: readonly Item[], sort: ListSort): Item[] {
+  const text = (a: string, b: string) =>
+    a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const compare = (a: Item, b: Item): number => {
+    switch (sort.column) {
+      case "id":
+        return a.number - b.number || text(a.repo, b.repo);
+      case "repo":
+        return text(a.repo, b.repo) || a.number - b.number;
+      case "title":
+        return text(a.title, b.title);
+      case "assignee":
+        return text(a.assignees[0] ?? "", b.assignees[0] ?? "");
+      case "status":
+        return text(a.state, b.state);
+      case "updated":
+        return a.updatedAt.localeCompare(b.updatedAt);
+    }
+  };
+  const sign = sort.direction === "asc" ? 1 : -1;
+  const unassignedLast = sort.column === "assignee";
+  return [...items].sort((a, b) => {
+    if (unassignedLast) {
+      const aEmpty = a.assignees.length === 0;
+      const bEmpty = b.assignees.length === 0;
+      if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+    }
+    return sign * compare(a, b);
+  });
+}
+
+export function withSort(query: string, sort: ListSort | null): string {
+  const kept = tokenizeQuery(query).filter(
+    (token) => !token.toLowerCase().startsWith("sort:"),
+  );
+  if (sort !== null) kept.push(`sort:${sort.column}-${sort.direction}`);
+  return kept.length === 0 ? "" : `${kept.join(" ")} `;
+}
+
+export function nextSort(current: ListSort, column: ColumnId): ListSort {
+  if (current.column !== column) {
+    return { column, direction: defaultSortDirection(column) };
+  }
+  return {
+    column,
+    direction: current.direction === "asc" ? "desc" : "asc",
+  };
+}
+
 export type SuggestionIcon =
   | { kind: "state"; itemKind: "issue" | "pr"; state: string }
   | { kind: "avatar"; login: string };
@@ -169,6 +250,7 @@ const QUALIFIER_KEYS: Array<{ key: string; hint: string }> = [
   { key: "label:", hint: "has label" },
   { key: "repo:", hint: "in repository" },
   { key: "no:", hint: "missing — assignee, label" },
+  { key: "sort:", hint: "order by column — e.g. sort:repo-asc" },
 ];
 
 function quoteValue(value: string): string {
@@ -234,6 +316,13 @@ export function buildSuggestions(
       insert: `${key}:${repo} `,
       label: repo,
     }));
+  }
+  if (key === "sort") {
+    return COLUMN_IDS.flatMap((column) =>
+      (["asc", "desc"] as const).map((direction) => `${column}-${direction}`),
+    )
+      .filter(matches)
+      .map((value) => ({ insert: `${key}:${value} `, label: value }));
   }
   if (key === "no") {
     return ["assignee", "label"].filter(matches).map((field) => ({
